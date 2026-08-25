@@ -1,12 +1,12 @@
 # Spec: Importação inicial do EPG Server
 
 - ID: `2026-08-25-importacao-repositorio-epgserver`
-- Estado: `pronta para publicação`
+- Estado: `publicada/concluída`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 - Criada em: `2026-08-25`
 - Última atualização: `2026-08-25`
-- Issue/commit relacionado: `a preencher`
+- Issue/commit relacionado: `26e975d5e398fdb1f95b41a10c93ccbdd75fc777`
 
 ## 1. Resumo
 
@@ -34,7 +34,7 @@ documentação e specs relacionados ao produto EPG.
 - [x] JavaScript incorporado sem erro de sintaxe.
 - [x] Imagem Docker construída usando somente o novo repositório.
 - [x] Varredura sem segredos e arquivos operacionais.
-- [ ] Commit enviado ao branch `main` do novo repositório.
+- [x] Commit enviado ao branch `main` do novo repositório.
 
 ## 5. Riscos e mitigação
 
@@ -67,10 +67,11 @@ commit. Não reescrever o histórico depois de publicado.
 | 2026-08-25 | testes locais | py_compile, 12 unittests, JavaScript e diff aprovados |
 | 2026-08-25 | build isolado | imagem `epgserver:repo-import-test-20260825` construída somente com este checkout |
 | 2026-08-25 | smoke Docker | health 1.5.0, painel autenticado, zero reinícios e produção preservada |
+| 2026-08-25 | publicação | commit inicial `26e975d` enviado para `origin/main` |
 
 ## 9. Resultado final
 
-- Estado: `validada; aguardando commit/push`
-- Commit: `a preencher`
+- Estado: `publicada e concluída`
+- Commit: `26e975d5e398fdb1f95b41a10c93ccbdd75fc777`
 - Tag: não aplicável nesta importação
-- Pendências: publicar o commit inicial e registrar o hash.
+- Pendências: nenhuma.
