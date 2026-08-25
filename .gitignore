@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.log
+.env
+epg-product/.env
+data/
+backups/
+build/
+.vscode/
+.idea/
