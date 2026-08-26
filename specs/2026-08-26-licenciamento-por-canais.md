@@ -1,12 +1,12 @@
 # Licenciamento online por quantidade de canais
 
 - ID: `2026-08-26-licenciamento-por-canais`
-- Estado: `validado para implantação`
+- Estado: `concluído`
 - Responsável: Codex
 - Solicitante: Julio Cortijo
 - Criada em: 2026-08-26
 - Última atualização: 2026-08-26
-- Issue/commit relacionado: a preencher
+- Issue/commit relacionado: `0eee192`
 
 ## 1. Resumo
 
@@ -125,7 +125,7 @@ Arquivos previstos: `license-server/*`, `epg-product/license_client.py`,
 - [x] Ocultar logo no HTML/JS.
 - [x] Atualizar documentação e imagens.
 - [x] Validar candidato isolado.
-- [ ] Implantar com rollback.
+- [x] Implantar com rollback.
 
 ## 12. Matriz de validação
 
@@ -136,7 +136,7 @@ Arquivos previstos: `license-server/*`, `epg-product/license_client.py`,
 | T-03 | chave ausente/revogada | isolado | emissores bloqueados e painel acessível | aprovado: health 503 |
 | T-04 | limite | isolado | persistência recusada sem efeito parcial | aprovado: HTTP 402 |
 | T-05 | painel | navegador desktop/móvel | logo ausente e licença visível | aprovado: 1440px e 390x844 |
-| T-06 | produção | servidor | 63/100 canais, 27 portadoras e zero erros | pendente |
+| T-06 | produção | servidor | 63/100 canais, 27 portadoras e zero erros | aprovado: 27 emissores, zero reinícios |
 
 ## 13. Implantação e rollback
 
@@ -154,9 +154,14 @@ Arquivos previstos: `license-server/*`, `epg-product/license_client.py`,
 | 2026-08-26 | desenho | chave aleatória, hash SHA-256, validação online e limite por `services` |
 | 2026-08-26 | testes locais | 39 testes EPG e 2 testes de licença aprovados; JavaScript válido |
 | 2026-08-26 | candidato Linux | 27 portadoras/63 canais; revogação 503, mutação 402 e persistência após restart |
+| 2026-08-26 | produção | EPG v1.10.0 e licenças v1.0.0; 27/27 emissores, 63/100 canais, zero erros/reinícios |
 
 ## 15. Resultado final
 
-- Estado final: validado para implantação
+- Estado final: concluído em produção
 - Critérios de aceite: 6/6
-- Testes, imagens, commit e rollback: a preencher
+- Testes: 39 EPG + 2 licença; JavaScript, desktop/móvel e candidato Linux aprovados
+- Imagens: `epgserver:v1.10.0-20260826` e `epg-license-server:v1.0.0-20260826`
+- Commit: `0eee192`
+- Rollback: `epg-stream-pre-v1.10.0-20260826-174835` e
+  `/srv/epg-stream-backup-pre-v1.10.0-20260826-174835`

@@ -506,12 +506,14 @@ Restrinja TCP/9100 à administração. Multicast é tráfego de saída.
 ### 10.3 Estado implantado em 26/08/2026
 
 ```text
-imagem:    epgserver:v1.9.0-20260826
+imagem:    epgserver:v1.10.0-20260826
 container: epg-stream
 rede:      host
 restart:   unless-stopped
 processo:  UID/GID 10001:10001
 volume:    /srv/epg-stream -> /data
+licença:   epg-license-server:v1.0.0-20260826 em 127.0.0.1:9200
+limite:    63/100 canais
 HTTP:      0.0.0.0:9100 no namespace de rede do host
 XMLTV:     http://181.233.106.46:9100/xmltv/<token>.xml
 ```
@@ -556,6 +558,19 @@ preservada em `epg-stream-disabled-v2.0.0-20260826-125556`.
 Validação posterior ao deploy da v1.9.0: health da versão `1.9.0`, autenticação
 administrativa HTTP 200, 27 portadoras em execução, zero portadoras em erro e
 zero reinícios do container.
+
+Rollback imediato da v1.10.0:
+
+- container: `epg-stream-pre-v1.10.0-20260826-174835`, com a imagem v1.9.0;
+- dados: `/srv/epg-stream-backup-pre-v1.10.0-20260826-174835`;
+- dados da autoridade: volume Docker `epg-license-data`;
+- chave do cliente: volume Docker `epg-license-client-secret`.
+
+Validação posterior ao deploy da v1.10.0: health EPG e licença HTTP 200,
+versões `1.10.0` e `1.0.0`, 27 portadoras, 63 canais, 27 emissores em execução,
+zero erros, zero reinícios e licença válida `63/100`. O servidor de licenças
+escuta somente em `127.0.0.1:9200`; o container final não mantém usuário ou
+senha de bootstrap em suas variáveis de ambiente.
 
 ### 10.4 Comportamento da tabela do painel
 
