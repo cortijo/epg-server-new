@@ -20,6 +20,12 @@ em `127.0.0.1`. Se o servidor de licenças ficar em outro host, publique-o
 somente atrás de HTTPS com certificado válido e controle de rede. Nunca exponha
 a porta 9200 diretamente à Internet.
 
+Na implantação PortoNET de 26/08/2026, o solicitante aceitou explicitamente
+HTTP sem TLS e o bind foi alterado para `0.0.0.0:9200`. A tabela
+`inet tvstream_firewall` limita TCP/9200 aos sets administrativos
+`trusted_ipv4` e `trusted_ipv6`; origens fora deles continuam bloqueadas. Essa
+exceção não autoriza liberar a porta globalmente.
+
 ## Build e primeira execução
 
 ```bash
