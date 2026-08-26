@@ -29,7 +29,7 @@ Execute na raiz do repositório:
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.6.0-20260825 .
+  -t epgserver:v1.7.0-20260826 .
 ```
 
 A imagem compila somente o emissor `TVStreamEpgOnly`. O runtime não contém
@@ -163,12 +163,13 @@ versão do logo e da SDT e reinicia somente o emissor afetado.
 O transporte passa a incluir:
 
 - descriptor de transmissão de logo `0xCF` na SDT/PID `0x0011`;
+- BIT `0xC4` no PID `0x0024`, anunciando CDT `0xC8` pelo descritor SI `0xD7`;
 - seis seções CDT `table_id 0xC8`, tipos/seções `0x00` a `0x05`, no PID
   `0x0029`.
 
 Para o primeiro teste no Dexing, use uma saída de laboratório, passe os PIDs
-`0x0011` e `0x0029` e evite uma segunda SDT conflitante gerada pelo equipamento.
-O modulador deve repassar `0x0011` e `0x0029` do mesmo input auxiliar. EIT e
+`0x0011`, `0x0024` e `0x0029` e evite uma segunda SDT/BIT conflitante gerada pelo equipamento.
+O modulador deve repassar os três PIDs do mesmo input auxiliar. EIT e
 relógio continuam nos PIDs `0x0012` e `0x0014`. A estrutura pode ser auditada
 com `scripts/verify_isdbtb_ts.py --epg-only --logo-service-id SID`; a exibição
 final ainda depende de o receptor implementar download de logo ARIB.

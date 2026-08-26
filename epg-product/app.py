@@ -33,7 +33,7 @@ from PIL import Image
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.6.0"
+PRODUCT_VERSION = "1.7.0"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",

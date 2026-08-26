@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada: **1.6.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada: **1.7.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -39,6 +39,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.4.0 | logo estrito ISDB-TB/ARIB: seis formatos, SDT `0xCF` e CDT `0xC8` |
 | 1.5.0 | grade horizontal por portadora, navegação temporal e detalhes |
 | 1.6.0 | publicações XMLTV normalizadas, versionadas e com URL permanente |
+| 1.7.0 | BIT `0xC4` anuncia CDT de logo pelo descritor SI `0xD7` |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -230,6 +231,7 @@ Cada portadora gera um MPEG-TS CBR auxiliar com datagramas UDP de 1316 bytes
 | `0x0011` SDT | nomes, fornecedor, TSID e ONID |
 | `0x0012` EIT | present/following e schedule de todos os serviços |
 | `0x0014` TDT/TOT | relógio e offset brasileiro |
+| `0x0024` BIT | anuncia CDT `0xC8` quando há logo habilitado |
 | `0x0029` CDT | seis formatos de logo ARIB, quando habilitado |
 | `0x1FFF` | preenchimento CBR |
 
@@ -244,6 +246,7 @@ Cadências atuais do emissor:
 |---|---:|
 | PAT e PMTs | 100 ms |
 | SDT | 500 ms |
+| BIT de anúncio da CDT | 1 s |
 | CDT de logo | 1 s |
 | slot de emissão do gerador EPG | 20 ms |
 | reinício do carrossel EIT | 2 s |
@@ -259,8 +262,9 @@ Cada serviço pode manter `logo.path`, usado apenas como miniatura autenticada
 no painel, e `logo.variants`, um mapa dos tipos ARIB `0` a `5`. As variantes
 possuem dimensões `48x24`, `36x24`, `48x27`, `72x36`, `54x36` e `64x36`, usam
 a CLUT comum de 128 cores e omitem `PLTE`/`tRNS`; o receptor fornece a paleta.
-O emissor publica o descritor `0xCF` na SDT/PID `0x0011` e seis CDT `0xC8` no
-PID `0x0029`. `signalling_version` pertence ao servidor e avança módulo 32 a
+O emissor publica o descritor `0xCF` na SDT/PID `0x0011`, uma BIT `0xC4` no
+PID `0x0024` cujo segundo loop anuncia `0xC8` em um descritor SI `0xD7`, e seis
+CDT `0xC8` no PID `0x0029`. `signalling_version` pertence ao servidor e avança módulo 32 a
 cada inclusão, troca, remoção ou migração de logo, evitando cache de uma SDT
 anterior. Registros v1.3 com arquivo único são convertidos no início, antes de
 qualquer processo emissor ser iniciado.
@@ -619,8 +623,8 @@ Para cada portadora:
 3. leve os canais originais para o mesmo Output TS;
 4. para EPG sem logo, encaminhe `0x0012 -> 0x0012` e
    `0x0014 -> 0x0014`;
-5. para EPG com logo, encaminhe também `0x0011 -> 0x0011` e
-   `0x0029 -> 0x0029`;
+5. para EPG com logo, encaminhe também `0x0011 -> 0x0011`,
+   `0x0024 -> 0x0024` e `0x0029 -> 0x0029`;
 6. mantenha PAT/PMT/NIT do multiplex conforme o Dexing;
 7. associe pelo SID: `service_id` deve ser o Program Number do canal;
 8. habilite SDT do EPG sem criar duas SDTs concorrentes no mesmo multiplex;

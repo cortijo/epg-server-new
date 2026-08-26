@@ -72,6 +72,55 @@ class SectionAssembler:
         self._consume()
 
 
+def parse_bit_section(section, errors):
+    """Return BIT identity and second-loop SI announcements."""
+    result = {
+        "onid": (section[3] << 8) | section[4],
+        "version": (section[5] >> 1) & 0x1F,
+        "broadcasters": [],
+        "announced_tables": set(),
+    }
+    first_descriptors_length = ((section[8] & 0x0F) << 8) | section[9]
+    offset = 10 + first_descriptors_length
+    section_end = len(section) - 4
+    while offset + 3 <= section_end:
+        broadcaster_id = section[offset]
+        descriptors_length = ((section[offset + 1] & 0x0F) << 8) | section[offset + 2]
+        descriptor_offset = offset + 3
+        descriptor_end = descriptor_offset + descriptors_length
+        announced = []
+        if descriptor_end > section_end:
+            errors.append("BIT possui loop de broadcaster truncado")
+            break
+        while descriptor_offset + 2 <= descriptor_end:
+            tag = section[descriptor_offset]
+            length = section[descriptor_offset + 1]
+            body_start = descriptor_offset + 2
+            body_end = body_start + length
+            if body_end > descriptor_end:
+                errors.append("BIT possui descritor truncado")
+                break
+            body = section[body_start:body_end]
+            if tag == 0xD7 and len(body) >= 3:
+                table_offset = 3
+                while table_offset + 2 <= len(body):
+                    announced_table = body[table_offset]
+                    description_length = body[table_offset + 1]
+                    if table_offset + 2 + description_length > len(body):
+                        errors.append("descritor SI 0xD7 possui descrição truncada")
+                        break
+                    result["announced_tables"].add(announced_table)
+                    announced.append(announced_table)
+                    table_offset += 2 + description_length
+            descriptor_offset = body_end
+        result["broadcasters"].append({
+            "broadcaster_id": broadcaster_id,
+            "announced_tables": announced,
+        })
+        offset = descriptor_end
+    return result
+
+
 def validate(path, expected_services, expected_tsid, expected_onid,
              epg_only=False, pmt_pids=None, require_logo=False,
              logo_services=None):
@@ -119,6 +168,10 @@ def validate(path, expected_services, expected_tsid, expected_onid,
     logo_cdts = []
     logo_cdt_keys = set()
     sdt_versions = set()
+    bit_versions = set()
+    bit_onids = set()
+    bit_broadcasters = []
+    bit_announced_tables = set()
     for pid, assembler in assemblers.items():
         for section in assembler.sections:
             table_id = section[0]
@@ -222,6 +275,12 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                 if key not in logo_cdt_keys:
                     logo_cdt_keys.add(key)
                     logo_cdts.append(item)
+            elif table_id == 0xC4 and len(section) >= 14:
+                parsed_bit = parse_bit_section(section, errors)
+                bit_onids.add(parsed_bit["onid"])
+                bit_versions.add(parsed_bit["version"])
+                bit_broadcasters.extend(parsed_bit["broadcasters"])
+                bit_announced_tables.update(parsed_bit["announced_tables"])
 
     if pid_counts[0x0012] == 0:
         errors.append("PID EIT 0x0012 ausente")
@@ -255,7 +314,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
     if epg_only:
         required_signalling = {0x0000, 0x0011, 0x0012, 0x0014} | pmt_pids
         if require_logo or logo_services:
-            required_signalling.add(0x0029)
+            required_signalling.update({0x0024, 0x0029})
         missing_signalling = sorted(required_signalling.difference(pid_counts))
         if missing_signalling:
             errors.append(
@@ -266,6 +325,12 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         if require_logo or logo_services:
             if table_counts[0xC8] == 0:
                 errors.append("CDT de logo 0xC8 ausente")
+            if table_counts[0xC4] == 0:
+                errors.append("BIT 0xC4 ausente")
+            if bit_onids and bit_onids != {expected_onid}:
+                errors.append(f"BIT possui ONID divergente: {sorted(bit_onids)}")
+            if 0xC8 not in bit_announced_tables:
+                errors.append("BIT não anuncia CDT 0xC8 no descritor SI 0xD7 do segundo loop")
             missing_logo_services = sorted(logo_services.difference(logo_descriptors))
             if missing_logo_services:
                 errors.append(f"SDT sem descriptor de logo para os serviços {missing_logo_services}")
@@ -299,7 +364,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                     if item["chunks"] != ["IHDR", "IDAT", "IEND"]:
                         errors.append(f"CDT tipo {item['logo_type']} possui chunks não permitidos: {item['chunks']}")
         unexpected_pids = sorted(set(pid_counts).difference(
-            required_signalling | {0x0029, 0x1FFF}))
+            required_signalling | {0x0024, 0x0029, 0x1FFF}))
         if unexpected_pids:
             errors.append(
                 "PIDs inesperados no transporte EPG-only: "
@@ -324,6 +389,10 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         "cdt_download_data_ids": sorted(cdt_download_ids),
         "logo_cdts": logo_cdts,
         "sdt_versions": sorted(sdt_versions),
+        "bit_versions": sorted(bit_versions),
+        "bit_onids": sorted(bit_onids),
+        "bit_broadcasters": bit_broadcasters,
+        "bit_announced_tables": [f"0x{table:02X}" for table in sorted(bit_announced_tables)],
         "continuity_errors": {f"0x{pid:04X}": count for pid, count in sorted(continuity_errors.items())},
         "errors": errors,
     }
@@ -344,7 +413,7 @@ def main():
         "--pmt-pid", type=lambda value: int(value, 0), action="append",
         help="PID de PMT esperado; repita por serviço (padrão: 0x1000)")
     parser.add_argument("--require-logo", action="store_true",
-                        help="exige CDT 0xC8/PID 0x0029 e descriptor de logo na SDT")
+                        help="exige SDT, BIT anunciando CDT e logo no PID 0x0029")
     parser.add_argument("--logo-service-id", type=int, action="append",
                         help="SID que deve possuir os seis formatos de logo; repita por canal")
     args = parser.parse_args()

@@ -31,6 +31,7 @@ constexpr std::uint64_t kNanosecondsPerSecond = 1000000000ULL;
 constexpr std::uint64_t kPatPmtIntervalNanoseconds = 100000000ULL;
 constexpr std::uint64_t kSdtIntervalNanoseconds = 500000000ULL;
 constexpr std::uint64_t kCdtIntervalNanoseconds = 1000000000ULL;
+constexpr std::uint64_t kBitIntervalNanoseconds = 1000000000ULL;
 constexpr const char* kDefaultSourceUrl =
     "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml";
 
@@ -249,6 +250,35 @@ std::vector<std::uint8_t> makeCdtSection(std::uint16_t originalNetworkId,
     return section;
 }
 
+std::vector<std::uint8_t> makeBitSection(std::uint16_t originalNetworkId,
+                                         std::uint8_t signalVersion) {
+    // ARIB STD-B10 BIT (table_id 0xC4).  ARIB TR-B14 requires CDT 0xC8 to
+    // be announced by an SI parameter descriptor (0xD7) in the second loop.
+    std::vector<std::uint8_t> siParameterDescriptor {
+        0xD7, 0x05,
+        signalVersion,       // parameter_version
+        0x00, 0x00,         // update_time (not scheduled)
+        0xC8, 0x00          // table_id=CDT, empty table_description
+    };
+    std::vector<std::uint8_t> section {0xC4, 0xF0, 0x00};
+    append16(section, originalNetworkId);
+    section.insert(section.end(), {
+        static_cast<std::uint8_t>(0xC1 | ((signalVersion & 0x1F) << 1)),
+        0x00, 0x00});
+    // reserved_future_use=111, broadcast_view_propriety=1, empty first loop.
+    section.insert(section.end(), {0xF0, 0x00});
+    // Local broadcaster loop. Reserved bits are all one as required.
+    section.push_back(0x00);
+    const std::size_t descriptorsLength = siParameterDescriptor.size();
+    section.push_back(static_cast<std::uint8_t>(
+        0xF0 | ((descriptorsLength >> 8) & 0x0F)));
+    section.push_back(static_cast<std::uint8_t>(descriptorsLength & 0xFF));
+    section.insert(section.end(), siParameterDescriptor.begin(),
+                   siParameterDescriptor.end());
+    finishSection(section);
+    return section;
+}
+
 void enqueueSection(const std::vector<std::uint8_t>& section, std::uint16_t pid,
                     std::uint8_t& continuity,
                     std::deque<std::array<std::uint8_t, kTsPacketSize>>& packets) {
@@ -287,6 +317,9 @@ public:
                 cdts_.push_back(makeCdtSection(config.originalNetworkId, service, asset));
             }
         }
+        if (!cdts_.empty()) {
+            bit_ = makeBitSection(config.originalNetworkId, config.signalVersion);
+        }
     }
 
     bool take(std::array<std::uint8_t, kTsPacketSize>& packet, std::uint64_t now) {
@@ -320,6 +353,13 @@ public:
             pending_.pop_front();
             return true;
         }
+        if (!bit_.empty() && now >= nextBit_) {
+            enqueueSection(bit_, 0x0024, bitContinuity_, pending_);
+            nextBit_ = now + kBitIntervalNanoseconds;
+            packet = pending_.front();
+            pending_.pop_front();
+            return true;
+        }
         return false;
     }
 
@@ -328,15 +368,18 @@ private:
     std::vector<std::uint8_t> pat_;
     std::vector<std::vector<std::uint8_t>> pmts_;
     std::vector<std::uint8_t> sdt_;
+    std::vector<std::uint8_t> bit_;
     std::vector<std::vector<std::uint8_t>> cdts_;
     std::vector<std::uint8_t> pmtContinuities_;
     std::deque<std::array<std::uint8_t, kTsPacketSize>> pending_;
     std::uint8_t patContinuity_ = 0;
     std::uint8_t sdtContinuity_ = 0;
     std::uint8_t cdtContinuity_ = 0;
+    std::uint8_t bitContinuity_ = 0;
     std::uint64_t nextPatPmt_ = 0;
     std::uint64_t nextSdt_ = 0;
     std::uint64_t nextCdt_ = 0;
+    std::uint64_t nextBit_ = 0;
 };
 
 void makeNullPacket(std::array<std::uint8_t, kTsPacketSize>& packet,
