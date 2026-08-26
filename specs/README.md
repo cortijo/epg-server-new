@@ -108,7 +108,7 @@ não colidam com produção. Registre comandos, resultados e evidências resumid
 - execute `git diff --check` e auditoria de segredos;
 - atualize o estado da spec para `concluída`;
 - faça commit da spec junto com código e documentação;
-- envie para `origin/main` no repositório `cortijo/TVstream`;
+- envie para `origin/main` no repositório `cortijo/epgserver`;
 - registre hash, tag e imagem implantada.
 
 ## Portões de qualidade

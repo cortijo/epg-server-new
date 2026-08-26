@@ -23,6 +23,30 @@ docker build -f epg-product/Dockerfile \
 
 ## Primeira execução
 
+### Instalação automatizada (recomendada)
+
+Em um servidor Linux, execute na raiz do repositório:
+
+```bash
+chmod +x scripts/install.sh
+sudo ./scripts/install.sh
+```
+
+O instalador verifica o Docker, solicita porta, volume, container, tag da
+imagem, fuso horário e, somente em volume vazio, o primeiro administrador. Em
+seguida compila, inicia, valida `/health` e recria o container sem manter as
+credenciais iniciais no ambiente. Ao detectar uma instalação anterior, ele
+constrói primeiro, faz backup, preserva o container antigo e oferece rollback
+automático se a nova versão não ficar saudável. O firewall não é alterado.
+
+Para ver as opções sem executar a instalação:
+
+```bash
+./scripts/install.sh --help
+```
+
+### Instalação manual
+
 ```bash
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/epg-stream
 cp epg-product/.env.example epg-product/.env

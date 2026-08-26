@@ -36,6 +36,22 @@ TVStreamer, GStreamer, FFmpeg ou ferramentas de transcodificação.
 
 ## Primeira execução
 
+O método recomendado é o instalador interativo, executado na raiz do
+repositório:
+
+```bash
+chmod +x scripts/install.sh
+sudo ./scripts/install.sh
+```
+
+Ele faz o build, cria ou atualiza o container, valida o health check e preserva
+backup e container anterior em atualizações. Credenciais de bootstrap são
+solicitadas sem eco, usadas somente no primeiro start e removidas do ambiente
+do container definitivo. O script informa a porta necessária, mas não modifica
+o firewall.
+
+Instalação manual:
+
 ```bash
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/epg-stream
 cp epg-product/.env.example epg-product/.env

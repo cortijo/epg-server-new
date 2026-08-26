@@ -1,5 +1,23 @@
 # Guia operacional para agentes — EPG Server
 
+## Instalador interativo
+
+Para uma implantação padrão em Linux, prefira `scripts/install.sh`. O script
+faz o build antes da troca, cria o volume com UID/GID `10001`, inicia com rede
+host e proteções de runtime, valida `/health` e preserva o container anterior e
+um backup dos dados. Ele nunca deve receber credenciais por argumento nem
+alterar o firewall. Antes de usá-lo, revise a spec
+`specs/2026-08-25-instalador-interativo-docker.md`.
+
+```bash
+chmod +x scripts/install.sh
+sudo ./scripts/install.sh
+```
+
+Em produção, confirme os valores apresentados antes de responder às perguntas.
+Não use a tag `latest` e não remova o container ou backup de rollback até a
+homologação funcional e multicast.
+
 ## 1. Escopo
 
 O EPG Server administra XMLTV e gera um MPEG-TS auxiliar com PSI/SI e EPG.

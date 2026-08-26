@@ -330,6 +330,56 @@ GStreamer/FFmpeg indicaria violação de escopo.
 
 ## 10. Implantação segura
 
+### 10.1 Instalador interativo recomendado
+
+Na raiz de um clone completo do repositório:
+
+```bash
+chmod +x scripts/install.sh
+sudo ./scripts/install.sh
+```
+
+O instalador solicita a porta HTTP, diretório persistente, nome do container,
+tag imutável da imagem, fuso e, em volume vazio, as credenciais do primeiro
+administrador. Ele recusa `latest`, tags locais já existentes, caminhos de dados
+relativos, nomes inválidos e portas fora do intervalo permitido.
+
+O fluxo operacional é:
+
+1. validar privilégios e Docker;
+2. instalar `docker.io` somente com confirmação e apenas em Debian/Ubuntu,
+   quando o Docker estiver ausente;
+3. coletar e validar as configurações;
+4. construir a imagem antes de interromper uma versão existente;
+5. criar backup do volume e preservar o container anterior em atualização;
+6. iniciar com rede host, UID/GID `10001`, raiz somente leitura, `/tmp` em
+   `tmpfs`, todas as capabilities removidas e `no-new-privileges`;
+7. consultar `/health` de dentro do container;
+8. em primeira instalação, remover o container de bootstrap e recriá-lo sem as
+   variáveis `EPG_ADMIN_USER` e `EPG_ADMIN_PASSWORD`;
+9. restaurar automaticamente o container anterior quando o health check falhar.
+
+O script não altera firewall. Ao terminar, ele informa qual porta TCP precisa
+ser autorizada para as redes administrativas. Cada atualização precisa receber
+uma tag nova; tags existentes não são sobrescritas.
+
+Em atualização bem-sucedida, os caminhos exatos do container anterior e do
+backup são impressos e devem permanecer preservados até a homologação. Para
+rollback manual:
+
+```bash
+docker rm -f epg-stream
+docker rename epg-stream-pre-AAAAMMDD-HHMMSS epg-stream
+docker update --restart=unless-stopped epg-stream
+docker start epg-stream
+curl -fsS http://127.0.0.1:9100/health
+```
+
+Restaure o backup dos dados somente se houver incompatibilidade comprovada e
+depois de preservar uma cópia do estado que falhou.
+
+### 10.2 Instalação manual
+
 ```bash
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/epg-stream
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/epg-stream/logs
@@ -349,7 +399,7 @@ ip route get 239.192.1.201
 
 Restrinja TCP/9100 à administração. Multicast é tráfego de saída.
 
-### 10.1 Estado implantado em 25/08/2026
+### 10.3 Estado implantado em 25/08/2026
 
 ```text
 imagem:    tvstream-epg:v1.5.0-20260825
@@ -380,7 +430,7 @@ Rollback preservado nesta implantação:
 - container: `epg-stream-pre-v1.5.0-20260825`, com a imagem v1.4.0;
 - dados: `/srv/epg-stream-backup-pre-v1.5.0-20260825`.
 
-### 10.2 Comportamento da tabela do painel
+### 10.4 Comportamento da tabela do painel
 
 - uma linha representa uma portadora;
 - ações operacionais permanecem na última coluna;
@@ -391,7 +441,7 @@ Rollback preservado nesta implantação:
   expansão obtenha a grade atualizada;
 - **Ver grade** abre o detalhamento diário do serviço selecionado.
 
-### 10.3 Clonagem de portadora
+### 10.5 Clonagem de portadora
 
 - **Clonar** prepara uma nova portadora com a configuração técnica e os
   serviços da original;
@@ -401,12 +451,12 @@ Rollback preservado nesta implantação:
 - cancelar não persiste nada; salvar exige um novo multicast válido;
 - a portadora original não é parada, reiniciada nem modificada.
 
-### 10.4 Fechamento de Fontes XMLTV
+### 10.6 Fechamento de Fontes XMLTV
 
 O cabeçalho da janela de Fontes XMLTV contém **Fechar**. O botão chama apenas
 `closeModal()`, não aciona endpoints e não altera a configuração persistida.
 
-### 10.5 Funcionalidades atuais do painel
+### 10.7 Funcionalidades atuais do painel
 
 - administração de usuários e troca de senha pelo perfil administrador;
 - CRUD e teste de fontes XMLTV;
