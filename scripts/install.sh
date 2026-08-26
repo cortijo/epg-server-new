@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PRODUCT_VERSION="1.9.0"
+PRODUCT_VERSION="1.10.0"
 DEFAULT_PORT="9100"
 DEFAULT_DATA_DIR="/srv/epg-stream"
 DEFAULT_CONTAINER="epg-stream"
 DEFAULT_IMAGE="epgserver:v${PRODUCT_VERSION}-$(date +%Y%m%d)"
 DEFAULT_TIMEZONE="America/Sao_Paulo"
+DEFAULT_LICENSE_SERVER_URL="http://127.0.0.1:9200"
+DEFAULT_LICENSE_KEY_FILE="/srv/epg-license-client/license.key"
+DEFAULT_INSTALLATION_ID="$(hostname 2>/dev/null || printf 'epg-server')-epg"
 CONTAINER_UID="10001"
 HEALTH_ATTEMPTS="30"
 HEALTH_INTERVAL="2"
@@ -36,7 +39,7 @@ Uso:
   ./scripts/install.sh --help
 
 O instalador solicita porta HTTP, diretório de dados, nome do container, tag da
-imagem e fuso horário. Em uma instalação nova, também solicita o primeiro
+imagem, fuso horário, servidor, arquivo da chave e identificador da licença. Em uma instalação nova, também solicita o primeiro
 administrador. Ele não altera o firewall do servidor.
 EOF
 }
@@ -100,6 +103,9 @@ validate_inputs() {
   if [[ -n "${PUBLIC_BASE_URL}" && ! "${PUBLIC_BASE_URL}" =~ ^https?://[^/]+$ ]]; then
     die "A URL pública deve usar http(s) e não pode conter caminho."
   fi
+  [[ "${LICENSE_SERVER_URL}" =~ ^https?://[^/]+$ ]] || die "A URL do servidor de licenças deve usar http(s) e não pode conter caminho."
+  [[ "${LICENSE_KEY_FILE}" == /* && -f "${LICENSE_KEY_FILE}" ]] || die "O arquivo da chave de licença não existe ou não é absoluto."
+  [[ "${INSTALLATION_ID}" =~ ^[a-zA-Z0-9._:-]{8,128}$ ]] || die "Identificador de instalação inválido."
 }
 
 container_exists() {
@@ -173,7 +179,11 @@ run_application() {
     --cap-drop ALL
     --env "EPG_HTTP_PORT=${HTTP_PORT}"
     --env "TZ=${TIMEZONE}"
+    --env "EPG_LICENSE_SERVER_URL=${LICENSE_SERVER_URL}"
+    --env "EPG_LICENSE_KEY_FILE=/run/secrets/epg_license_key"
+    --env "EPG_LICENSE_INSTALLATION_ID=${INSTALLATION_ID}"
     --volume "${DATA_DIR}:/data"
+    --volume "${LICENSE_KEY_FILE}:/run/secrets/epg_license_key:ro"
   )
   if [[ -n "${PUBLIC_BASE_URL}" ]]; then
     args+=(--env "EPG_PUBLIC_BASE_URL=${PUBLIC_BASE_URL}")
@@ -236,6 +246,9 @@ main() {
   ask_default IMAGE_TAG "Nome e tag imutável da imagem" "${DEFAULT_IMAGE}"
   ask_default TIMEZONE "Fuso horário" "${DEFAULT_TIMEZONE}"
   ask_default PUBLIC_BASE_URL "URL pública base (opcional, ex.: http://IP:PORTA)" ""
+  ask_default LICENSE_SERVER_URL "URL do servidor de licenças" "${DEFAULT_LICENSE_SERVER_URL}"
+  ask_default LICENSE_KEY_FILE "Arquivo da chave de licença" "${DEFAULT_LICENSE_KEY_FILE}"
+  ask_default INSTALLATION_ID "Identificador desta instalação" "${DEFAULT_INSTALLATION_ID}"
   PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
   validate_inputs
 

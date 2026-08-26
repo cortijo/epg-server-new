@@ -7,6 +7,8 @@ transcodifica e não retransmite vídeo ou áudio.
 ## Componentes
 
 - `epg-product/app.py`: painel web, autenticação, usuários, fontes e portadoras;
+- `epg-product/license_client.py`: validação online e limite de canais;
+- `license-server/`: autoridade de licenças em imagem Docker independente;
 - `epg-product/app.py`: publicações XMLTV versionadas com URL permanente;
 - `src/EpgOnlyMain.cpp`: emissor MPEG-TS EPG-only;
 - `src/EpgInjector.cpp`: XMLTV, EIT, TDT e TOT;
@@ -19,7 +21,9 @@ transcodifica e não retransmite vídeo ou áudio.
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.9.0 .
+  -t epgserver:v1.10.0 .
+docker build -f license-server/Dockerfile \
+  -t epg-license-server:v1.0.0 .
 ```
 
 ## Primeira execução
@@ -34,7 +38,8 @@ sudo ./scripts/install.sh
 ```
 
 O instalador verifica o Docker, solicita porta, volume, container, tag da
-imagem, fuso, URL pública opcional e, somente em volume vazio, o primeiro administrador. Em
+imagem, fuso, URL pública opcional, servidor/chave/instalação da licença e,
+somente em volume vazio, o primeiro administrador. Em
 seguida compila, inicia, valida `/health` e recria o container sem manter as
 credenciais iniciais no ambiente. Ao detectar uma instalação anterior, ele
 constrói primeiro, faz backup, preserva o container antigo e oferece rollback
@@ -66,6 +71,19 @@ docker compose --env-file epg-product/.env \
 O painel usa TCP `9100` e a emissão multicast usa a rede do host. Leia
 `epg-product/README.md` antes da implantação.
 
+## Licenciamento
+
+A partir da versão 1.10.0, o EPG Stream exige uma licença online válida. O
+limite conta os **canais/serviços** de todas as portadoras, não a quantidade de
+portadoras. Sem chave, com licença revogada/expirada, servidor indisponível ou
+quantidade acima do limite, os emissores são interrompidos e novas alterações
+de portadoras são recusadas; o painel continua acessível para diagnóstico.
+
+O servidor independente escuta por padrão somente em `127.0.0.1:9200`. A
+chave completa é exibida uma única vez, é montada no cliente por arquivo e o
+servidor persiste apenas seu SHA-256. Consulte
+`license-server/README.md` antes de criar ou distribuir licenças.
+
 ## Validação
 
 ```bash
@@ -83,7 +101,7 @@ IDs pelo código numérico do canal, descarta eventos sem duração e publica to
 as versões em uma única URL. A URL escolhe automaticamente a grade vigente e
 permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
 
-## Estado conhecido da versão 1.9.0
+## Estado conhecido da versão 1.10.0
 
 - EIT, TDT/TOT, SDT, BIT e CDT de logo são emitidos e possuem auditoria;
 - o logo usa descritor SDT `0xCF` e CDT `0xC8` no PID `0x0029`;
@@ -91,6 +109,10 @@ permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
   parâmetros SI `0xD7` no segundo loop;
 - categorias do XMLTV são transmitidas pelo descritor EIT `0x54`; cada canal
   pode definir um fallback quando o evento não trouxer categoria reconhecida;
+- os controles e miniaturas de logo estão ocultos no painel; estrutura, API e
+  transporte de logos já cadastrados continuam preservados;
+- a licença online controla o total de canais/serviços e opera em modo
+  fail-closed;
 - a homologação final sempre deve considerar a saída do multiplexador e o RF,
   não apenas o multicast auxiliar.
 

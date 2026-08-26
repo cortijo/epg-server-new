@@ -28,7 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --system --uid 10001 --home /data --shell /usr/sbin/nologin epgstream
 COPY --from=build /out/TVStreamEpgOnly /app/TVStreamEpgOnly
 COPY epg-product/app.py /app/app.py
-RUN chmod 0755 /app/TVStreamEpgOnly /app/app.py
+COPY epg-product/license_client.py /app/license_client.py
+RUN chmod 0755 /app/TVStreamEpgOnly /app/app.py /app/license_client.py
 WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 9100/tcp

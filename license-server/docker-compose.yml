@@ -1,0 +1,20 @@
+services:
+  epg-license-server:
+    image: epg-license-server:v1.0.0
+    container_name: epg-license-server
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      LICENSE_HTTP_HOST: ${LICENSE_HTTP_HOST:-127.0.0.1}
+      LICENSE_HTTP_PORT: ${LICENSE_HTTP_PORT:-9200}
+      LICENSE_ADMIN_USER: ${LICENSE_ADMIN_USER:-}
+      LICENSE_ADMIN_PASSWORD: ${LICENSE_ADMIN_PASSWORD:-}
+    volumes:
+      - /srv/epg-license-server:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

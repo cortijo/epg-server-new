@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada: **1.9.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada: **1.10.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -42,6 +42,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.7.0 | BIT `0xC4` anuncia CDT de logo pelo descritor SI `0xD7` |
 | 1.8.0 | categoria XMLTV/fallback por canal no descritor EIT `0x54` |
 | 1.9.0 | fuso e correção de relógio configuráveis por portadora |
+| 1.10.0 | licenciamento online por canais e interface de logo temporariamente oculta |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -55,6 +56,8 @@ uma tag existente nem publique outra imagem com a mesma tag.
 | GuideCache | `epg-product/app.py` | download, gzip, parsing e cache XMLTV |
 | Publicações XMLTV | `epg-product/app.py` | upload, normalização, vigência e URL estável |
 | Supervisor | `epg-product/app.py` | processos, auto-start, restart e logs |
+| Cliente de licença | `epg-product/license_client.py` | validação online fail-closed e limite de canais |
+| Servidor de licença | `license-server/` | geração, vínculo, limite e revogação das chaves |
 | Emissor | `src/EpgOnlyMain.cpp` | sinalização, shaping CBR e socket multicast |
 | Gerador EPG | `src/EpgInjector.cpp` | XMLTV, descritores, EIT, TDT e TOT |
 | Imagem | `epg-product/Dockerfile` | build mínimo e runtime sem transcode |
@@ -74,6 +77,7 @@ binário emissor é copiado. Não há binário do TVStream no produto EPG.
 | `scripts/verify_isdbtb_ts.py` | auditor estrutural do TS ISDB-TB |
 | `scripts/verify_epg_clock.py` | auditor de horário EIT/TDT/TOT |
 | `epg-product/tests/` | testes do painel, API, dados e segurança |
+| `license-server/` | autoridade de licenças, imagem e testes independentes |
 | `specs/` | especificações e evidências de cada mudança |
 | `ARQUITETURA_EPG_MULTICAST_ISDBTB.md` | detalhes binários das tabelas SI |
 | `GUIA_OPERACIONAL_AGENTES.md` | método obrigatório de análise/release/deploy |
@@ -331,6 +335,7 @@ HTTP Basic.
 | POST | `/api/users` | criar/editar usuário (somente administrador) |
 | POST | `/api/users/delete` | excluir usuário (somente administrador) |
 | GET | `/api/state` | portadoras e runtime, sem URLs |
+| GET | `/api/license` | forçar checagem e retornar estado público da licença |
 | GET | `/api/sources` | fontes para administração |
 | GET | `/api/publications` | publicações, versões, vigências e situação |
 | POST | `/api/publications` | criar ou renomear publicação |
@@ -361,6 +366,31 @@ usa o limite específico de 96 MiB.
 As ações dinâmicas aceitas em `/api/carriers/<ação>` são somente `start`,
 `stop` e `restart`. Qualquer outra rota deve retornar 404.
 
+### 7.1 Licenciamento por canais
+
+A versão 1.10.0 conta todos os elementos `services` persistidos. O cliente lê
+a chave de um arquivo montado somente leitura e envia chave, identificador da
+instalação e total de canais para `POST /api/validate` do servidor independente.
+O painel e `/api/state` recebem somente o estado público, nunca a chave.
+
+O comportamento é fail-closed: configuração ausente, resposta inválida,
+indisponibilidade, revogação, expiração, vínculo divergente ou excesso de
+canais interrompem os emissores. O painel continua disponível; `/health`
+retorna 503 e a alteração de portadora que não cabe na licença retorna 402 sem
+persistir. `start` e `restart` também revalidam antes de executar.
+
+Variáveis obrigatórias:
+
+```text
+EPG_LICENSE_SERVER_URL=http://127.0.0.1:9200
+EPG_LICENSE_KEY_FILE=/run/secrets/epg_license_key
+EPG_LICENSE_INSTALLATION_ID=identificador-estavel
+EPG_LICENSE_CHECK_SECONDS=60
+```
+
+O servidor, sua API, bootstrap, backup e limites de segurança estão documentados
+em `license-server/README.md`. Em hosts diferentes, a URL deve usar HTTPS.
+
 ## 8. Segurança
 
 - `EPG_ADMIN_USER` e `EPG_ADMIN_PASSWORD` são usados somente no primeiro
@@ -377,9 +407,14 @@ As ações dinâmicas aceitas em `/api/carriers/<ação>` são somente `start`,
 - filesystem é somente leitura; `/data` e `/tmp` são exceções;
 - CSP, anti-frame e anti-MIME-sniff estão ativos;
 - use proxy HTTPS, VPN ou rede administrativa; o produto não termina TLS.
+- a chave de licença fica em arquivo externo ao volume da aplicação e não
+  aparece no estado, logs ou `docker inspect`;
+- a autoridade persiste apenas SHA-256 da chave e deve ficar em loopback ou
+  atrás de HTTPS.
 
 Para comercialização futura: Argon2id, auditoria imutável, recuperação de senha,
-segundo fator e licenciamento. Não misture essas funções ao gerador MPEG-TS.
+segundo fator, assinatura de imagens e serviço de licenças redundante. Não
+misture essas funções ao gerador MPEG-TS.
 
 ## 9. Build e testes
 
@@ -387,9 +422,11 @@ Na raiz:
 
 ```bash
 python3 -m unittest discover -s epg-product/tests -v
-python3 -m py_compile epg-product/app.py
-docker build -f epg-product/Dockerfile -t tvstream-epg:v1.5.0-20260825 .
-docker image inspect tvstream-epg:v1.5.0-20260825
+python3 -m unittest discover -s license-server/tests -v
+python3 -m py_compile epg-product/app.py epg-product/license_client.py license-server/app.py
+docker build -f epg-product/Dockerfile -t epgserver:v1.10.0-20260826 .
+docker build -f license-server/Dockerfile -t epg-license-server:v1.0.0-20260826 .
+docker image inspect epgserver:v1.10.0-20260826
 ```
 
 O runtime instala somente Python, libcurl, JsonCpp e Boost. Adicionar

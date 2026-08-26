@@ -1,6 +1,6 @@
 services:
   epg-stream:
-    image: epgserver:v1.9.0
+    image: epgserver:v1.10.0
     container_name: epg-stream
     network_mode: host
     restart: unless-stopped
@@ -10,9 +10,13 @@ services:
       EPG_ADMIN_PASSWORD: ${EPG_ADMIN_PASSWORD:-}
       EPG_HTTP_PORT: ${EPG_HTTP_PORT:-9100}
       EPG_PUBLIC_BASE_URL: ${EPG_PUBLIC_BASE_URL:-}
+      EPG_LICENSE_SERVER_URL: ${EPG_LICENSE_SERVER_URL:-http://127.0.0.1:9200}
+      EPG_LICENSE_KEY_FILE: /run/secrets/epg_license_key
+      EPG_LICENSE_INSTALLATION_ID: ${EPG_LICENSE_INSTALLATION_ID:-}
       TZ: America/Sao_Paulo
     volumes:
       - /srv/epg-stream:/data
+      - /srv/epg-license-client/license.key:/run/secrets/epg_license_key:ro
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777

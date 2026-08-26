@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,9 +13,39 @@ from app import (
     normalize_uploaded_xmltv, password_matches, password_record,
     select_publication_version, validate_carrier,
 )
+from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_license_client_is_fail_closed_and_never_exposes_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "license.key"
+            manager = LicenseManager("http://license.test:9200", str(key_path), "install-001", 60)
+            self.assertFalse(manager.check(2, force=True)["valid"])
+            key_path.write_text("EPG-" + "a" * 48, encoding="utf-8")
+            response = mock.MagicMock()
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            response.read.return_value = b'{"valid":true,"name":"Teste","max_channels":3,"channel_count":2,"checked_at":1}'
+            with mock.patch("urllib.request.urlopen", return_value=response):
+                status = manager.check(2, force=True)
+            self.assertTrue(status["valid"])
+            self.assertEqual(status["max_channels"], 3)
+            self.assertNotIn("key", status)
+
+    def test_license_client_rejects_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "license.key"
+            key_path.write_text("EPG-" + "a" * 48, encoding="utf-8")
+            manager = LicenseManager("http://license.test:9200", str(key_path), "install-001")
+            error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
+                "http://license.test:9200/api/validate", 403, "Forbidden", {},
+                __import__("io").BytesIO(b'{"valid":false,"reason":"Quantidade de canais acima do limite contratado","max_channels":1}')
+            )
+            with mock.patch("urllib.request.urlopen", side_effect=error):
+                with self.assertRaises(LicenseError):
+                    manager.require(2, force=True)
+
     def test_xmltv_timezone_and_schedule(self):
         parsed = parse_xmltv_datetime("20260824120000 -0300")
         self.assertEqual(parsed, datetime(2026, 8, 24, 15, 0, tzinfo=timezone.utc))
@@ -258,6 +289,18 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('class="timeline-program', INDEX_HTML)
         self.assertIn('class="timeline-now"', INDEX_HTML)
         self.assertIn("function openTimelineProgram(serviceId,start)", INDEX_HTML)
+
+    def test_logo_controls_and_previews_are_hidden_but_backend_is_preserved(self):
+        self.assertNotIn("Logo ISDB-TB<div", INDEX_HTML)
+        self.assertNotIn('class="s-logo-file"', INDEX_HTML)
+        self.assertNotIn('src="/api/logo?carrier_id=', INDEX_HTML)
+        self.assertIn("async function uploadLogo(input)", INDEX_HTML)
+        self.assertIn("async function deleteLogo(button)", INDEX_HTML)
+
+    def test_license_status_is_visible_in_panel(self):
+        self.assertIn('id="licenseMetric"', INDEX_HTML)
+        self.assertIn('id="mLicense"', INDEX_HTML)
+        self.assertIn("state.license?.valid", INDEX_HTML)
 
     def test_publications_ui_has_raw_upload_and_stable_url(self):
         self.assertIn('onclick="openPublications()">Publicações XMLTV', INDEX_HTML)

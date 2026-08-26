@@ -30,6 +30,12 @@ publicação, as versões anteriores e a seleção por vigência. Nunca trate o 
 original do upload como caminho de arquivo e valide o XML normalizado tanto no
 painel quanto no emissor C++.
 
+A partir da versão 1.10, nenhum emissor opera sem licença online válida. O
+limite é a soma de `services`, não de portadoras. Antes de um deploy, confirme
+servidor de licenças, arquivo secreto, identificador estável e capacidade para
+os canais atuais. Nunca registre a chave, coloque-a em `.env`, passe-a como
+argumento ou exponha o servidor HTTP fora de loopback; em outro host use HTTPS.
+
 O firewall pode ser administrado separadamente por
 `scripts/firewall-manager.sh`. Nunca incorpore essa execução ao instalador do
 produto. Antes de aplicar, use `check` e `render`, confirme que a sessão SSH
@@ -56,6 +62,8 @@ multiplex final. Uma portadora pode ter até 64 serviços.
 ```bash
 python3 -m py_compile epg-product/app.py
 python3 -m unittest discover -s epg-product/tests -v
+python3 -m py_compile license-server/app.py
+python3 -m unittest discover -s license-server/tests -v
 git diff --check
 docker build -f epg-product/Dockerfile -t epgserver:vX.Y.Z-AAAAMMDD .
 ```
@@ -95,6 +103,8 @@ confirme SDT `0xCF`, CDT `0xC8`, PID `0x0029`, CRC e continuidade. A versão
    somente leitura, `/tmp` temporário, capabilities removidas e
    `no-new-privileges`.
 7. Confirme health, zero reinícios, logs e processos emissores.
+8. Confirme `license.valid=true`, consumo/limite e que a chave não aparece no
+   estado nem no `docker inspect`.
 
 ## 7. Rollback
 
