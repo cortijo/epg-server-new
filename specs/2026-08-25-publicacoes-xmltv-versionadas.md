@@ -98,7 +98,7 @@ volume durante um rollback sem interferir nas fontes existentes.
 
 ## Resultado da validação
 
-- 22 testes automatizados aprovados;
+- 23 testes automatizados aprovados;
 - Python, JavaScript do painel e diff aprovados nas verificações sintáticas;
 - imagem `v1.6.0` compilada com o emissor C++ atualizado;
 - `guide.xml` real de 11,2 MB convertido para 12,1 MB;
@@ -115,4 +115,11 @@ volume durante um rollback sem interferir nas fontes existentes.
 - o emissor C++ carregou o canal de teste, 63 programas e 49 seções schedule e
   permaneceu `running` em multicast isolado;
 - os artefatos de laboratório foram removidos e a produção v1.5.0 permaneceu
-  saudável durante todo o ensaio.
+  saudável durante todo o ensaio;
+- produção atualizada para `epgserver:v1.6.0-20260825`, schema 3, 28 emissores
+  ativos e zero reinícios do container após o corte;
+- `EPG_PUBLIC_BASE_URL` configurada como `http://181.233.106.46:9100`, mantendo
+  as URLs permanentes utilizáveis fora do servidor;
+- rollback preservado no container
+  `epg-stream-pre-v1.6.0-20260825-214509` e no backup
+  `/srv/epg-stream-backup-pre-v1.6.0-20260825-214509`.

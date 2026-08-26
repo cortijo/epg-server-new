@@ -446,13 +446,14 @@ Restrinja TCP/9100 à administração. Multicast é tráfego de saída.
 ### 10.3 Estado implantado em 25/08/2026
 
 ```text
-imagem:    tvstream-epg:v1.5.0-20260825
+imagem:    epgserver:v1.6.0-20260825
 container: epg-stream
 rede:      host
 restart:   unless-stopped
 processo:  UID/GID 10001:10001
 volume:    /srv/epg-stream -> /data
 HTTP:      0.0.0.0:9100 no namespace de rede do host
+XMLTV:     http://181.233.106.46:9100/xmltv/<token>.xml
 ```
 
 Com `network_mode: host`, o container compartilha as interfaces, rotas e portas
@@ -471,8 +472,8 @@ curl -fsS http://127.0.0.1:9100/health
 
 Rollback preservado nesta implantação:
 
-- container: `epg-stream-pre-v1.5.0-20260825`, com a imagem v1.4.0;
-- dados: `/srv/epg-stream-backup-pre-v1.5.0-20260825`.
+- container: `epg-stream-pre-v1.6.0-20260825-214509`, com a imagem v1.5.0;
+- dados: `/srv/epg-stream-backup-pre-v1.6.0-20260825-214509`.
 
 ### 10.4 Comportamento da tabela do painel
 
