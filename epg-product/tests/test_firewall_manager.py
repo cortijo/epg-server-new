@@ -103,6 +103,8 @@ class FirewallManagerTests(unittest.TestCase):
             self.assertIn("IP da sessão SSH", result.stderr)
 
     def test_dry_run_needs_neither_root_nor_nft(self):
+        if shutil.which("bash") is None:
+            self.skipTest("bash não está disponível neste ambiente")
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "firewall.conf"
             config.write_text("NETWORK=192.168.0.0/16\nTCP_PORT=22\n", encoding="utf-8")

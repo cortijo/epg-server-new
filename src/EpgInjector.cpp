@@ -307,11 +307,11 @@ std::vector<std::uint8_t> eventBytes(const Programme& event, EpgProfile profile,
 
     if (profile == EpgProfile::IsdbTb) {
         appendExtendedEventDescriptors(descriptor, event);
-        if (!event.categories.empty()) {
-            const std::uint8_t content = contentNibbleForCategory(event.categories.front());
-            if (content != 0) {
-                descriptor.insert(descriptor.end(), {0x54, 0x02, content, 0x00});
-            }
+        for (const auto& category : event.categories) {
+            const std::uint8_t content = contentNibbleForCategory(category);
+            if (content == 0) continue;
+            descriptor.insert(descriptor.end(), {0x54, 0x02, content, 0x00});
+            break;
         }
         const int age = parentalAge(event.rating);
         if (age >= 0) {
@@ -489,6 +489,7 @@ std::string safeSourceLabel(const std::string& url) {
 }
 
 bool parseProgrammes(const std::string& xml, const std::string& channelId,
+                     const std::string& defaultCategory,
                      std::vector<Programme>& programmes, std::string& error) {
     boost::property_tree::ptree document;
     try {
@@ -528,6 +529,14 @@ bool parseProgrammes(const std::string& xml, const std::string& channelId,
             } else if (child.first == "rating" && programme.rating.empty()) {
                 programme.rating = child.second.get<std::string>("value", "");
             }
+        }
+        const bool hasRecognizedCategory = std::any_of(
+            programme.categories.begin(), programme.categories.end(),
+            [](const std::string& category) {
+                return contentNibbleForCategory(category) != 0;
+            });
+        if (!hasRecognizedCategory && contentNibbleForCategory(defaultCategory) != 0) {
+            programme.categories.insert(programme.categories.begin(), defaultCategory);
         }
         programmes.push_back(std::move(programme));
     }
@@ -728,6 +737,10 @@ std::uint64_t programmeFingerprint(const std::vector<Programme>& programmes) {
         append(&programme.stop, sizeof(programme.stop));
         append(programme.title.data(), programme.title.size());
         append(programme.description.data(), programme.description.size());
+        for (const auto& category : programme.categories) {
+            append(category.data(), category.size());
+        }
+        append(programme.rating.data(), programme.rating.size());
     }
     return hash;
 }
@@ -834,6 +847,7 @@ struct EpgInjector::Impl {
         : active(config.epgEnabled && !config.epgChannelId.empty() && !config.epgSourceUrl.empty()),
           streamId(config.id.empty() ? "__anonymous__" : config.id),
           sourceUrl(config.epgSourceUrl), channelId(config.epgChannelId),
+          defaultCategory(config.epgDefaultCategory),
           serviceId(static_cast<std::uint16_t>(config.serviceId ? config.serviceId : 1)),
           profile(epgProfile(config.epgMode)),
           transportStreamId(static_cast<std::uint16_t>(config.epgTransportStreamId)),
@@ -870,7 +884,7 @@ struct EpgInjector::Impl {
                 std::string xml;
                 std::vector<Programme> programmes;
                 downloadSucceeded = downloadXml(sourceUrl, xml, error) &&
-                    parseProgrammes(xml, channelId, programmes, error);
+                    parseProgrammes(xml, channelId, defaultCategory, programmes, error);
                 if (downloadSucceeded) {
                     const std::uint64_t fingerprint = programmeFingerprint(programmes);
                     if (profile == EpgProfile::IsdbTb && fingerprintInitialized &&
@@ -1033,6 +1047,7 @@ struct EpgInjector::Impl {
     std::string streamId;
     std::string sourceUrl;
     std::string channelId;
+    std::string defaultCategory;
     std::uint16_t serviceId = 1;
     EpgProfile profile = EpgProfile::Generic;
     std::uint16_t transportStreamId = 1;

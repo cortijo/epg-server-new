@@ -19,7 +19,7 @@ transcodifica e não retransmite vídeo ou áudio.
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.7.0 .
+  -t epgserver:v1.8.0 .
 ```
 
 ## Primeira execução
@@ -83,12 +83,14 @@ IDs pelo código numérico do canal, descarta eventos sem duração e publica to
 as versões em uma única URL. A URL escolhe automaticamente a grade vigente e
 permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
 
-## Estado conhecido da versão 1.7.0
+## Estado conhecido da versão 1.8.0
 
 - EIT, TDT/TOT, SDT, BIT e CDT de logo são emitidos e possuem auditoria;
 - o logo usa descritor SDT `0xCF` e CDT `0xC8` no PID `0x0029`;
 - a BIT `0xC4` no PID `0x0024` anuncia a CDT `0xC8` por descritor de
   parâmetros SI `0xD7` no segundo loop;
+- categorias do XMLTV são transmitidas pelo descritor EIT `0x54`; cada canal
+  pode definir um fallback quando o evento não trouxer categoria reconhecida;
 - a homologação final sempre deve considerar a saída do multiplexador e o RF,
   não apenas o multicast auxiliar.
 

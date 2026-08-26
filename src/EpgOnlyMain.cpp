@@ -129,6 +129,7 @@ struct EpgService {
     std::string id;
     std::string name;
     std::string channelId;
+    std::string defaultCategory;
     std::uint16_t serviceId = 1;
     std::string sourceUrl;
     std::vector<LogoAsset> logoAssets;
@@ -416,6 +417,7 @@ EpgOnlyConfiguration loadConfiguration() {
             service.id = value.get("id", "").asString();
             service.name = value.get("name", "").asString();
             service.channelId = value.get("epg_channel_id", "").asString();
+            service.defaultCategory = value.get("default_category", "").asString();
             service.serviceId = static_cast<std::uint16_t>(value.get("service_id", 0).asUInt());
             service.sourceUrl = value.get("source_url", config.sourceUrl).asString();
             const auto logo = value["logo"];
@@ -478,6 +480,7 @@ StreamConfig injectorConfiguration(const EpgOnlyConfiguration& carrier,
     config.epgMode = "isdbtb";
     config.epgSourceUrl = service.sourceUrl;
     config.epgChannelId = service.channelId;
+    config.epgDefaultCategory = service.defaultCategory;
     config.serviceId = service.serviceId;
     config.epgTransportStreamId = carrier.transportStreamId;
     config.epgOriginalNetworkId = carrier.originalNetworkId;

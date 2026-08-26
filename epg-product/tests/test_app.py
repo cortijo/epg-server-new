@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import sys
@@ -44,6 +44,26 @@ class EpgProductTests(unittest.TestCase):
         self.assertEqual(len(carrier["services"]), 2)
         self.assertEqual(carrier["transport_stream_id"], 72)
 
+    def test_channel_category_fallback_is_validated_and_rendered(self):
+        carrier = validate_carrier({
+            "name": "Portadora esporte", "source_id": "source",
+            "destination": "239.192.1.210", "port": 5012,
+            "interface_address": "10.0.0.10",
+            "services": [{"name": "SPORTV", "epg_channel_id": "sportv.br",
+                          "service_id": 2304, "default_category": "Esportes"}],
+        })
+        self.assertEqual(carrier["services"][0]["default_category"], "Esportes")
+        self.assertIn('class="s-category"', INDEX_HTML)
+        self.assertIn("Usada apenas quando o XMLTV não informar", INDEX_HTML)
+        with self.assertRaises(ApiError):
+            validate_carrier({
+                "name": "Inválida", "source_id": "source",
+                "destination": "239.192.1.211", "port": 5012,
+                "interface_address": "10.0.0.10",
+                "services": [{"name": "Canal", "epg_channel_id": "canal.br",
+                              "service_id": 1, "default_category": "Qualquer coisa"}],
+            })
+
     def test_carrier_rejects_duplicate_service_ids(self):
         with self.assertRaises(ApiError):
             validate_carrier({
@@ -66,11 +86,15 @@ class EpgProductTests(unittest.TestCase):
             json.loads(path.read_text(encoding="utf-8"))
 
     def test_provider_xmltv_is_normalized_for_both_parsers(self):
-        payload = '''<?xml version="1.0" encoding="UTF-8"?><tv>
+        start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1)
+        stop = start + timedelta(hours=2)
+        start_text = start.strftime("%Y%m%d%H%M%S")
+        stop_text = stop.strftime("%Y%m%d%H%M%S")
+        payload = f'''<?xml version="1.0" encoding="UTF-8"?><tv>
           <channel id="0121 TELECINE PREMIUM"><display-name>Telecine Premium</display-name></channel>
           <channel id="0121 TELECINE PREMIUM"><display-name>Duplicado</display-name></channel>
-          <programme channel="0121 TC PREMIUM" start="20260825000000" stop="20260825020000"><title>Filme</title></programme>
-          <programme channel="0121 TC PREMIUM" start="20260825020000" stop="20260825020000"><title>Invalido</title></programme>
+          <programme channel="0121 TC PREMIUM" start="{start_text}" stop="{stop_text}"><title>Filme</title></programme>
+          <programme channel="0121 TC PREMIUM" start="{stop_text}" stop="{stop_text}"><title>Invalido</title></programme>
         </tv>'''.encode("utf-8")
         normalized, stats = normalize_uploaded_xmltv(payload)
         root = __import__("xml.etree.ElementTree", fromlist=["ElementTree"]).fromstring(normalized)
@@ -79,8 +103,8 @@ class EpgProductTests(unittest.TestCase):
         self.assertEqual([item.get("id") for item in channels], ["0121 TELECINE PREMIUM"])
         self.assertEqual(len(programmes), 1)
         self.assertEqual(programmes[0].get("channel"), "0121 TELECINE PREMIUM")
-        self.assertEqual(programmes[0].get("start"), "20260825000000 -0300")
-        self.assertEqual(programmes[0].get("stop"), "20260825020000 -0300")
+        self.assertEqual(programmes[0].get("start"), start_text + " -0300")
+        self.assertEqual(programmes[0].get("stop"), stop_text + " -0300")
         self.assertEqual(stats["channel_refs_rewritten"], 2)
         self.assertEqual(stats["duplicate_channels_removed"], 1)
         self.assertEqual(stats["invalid_programmes_removed"], 1)

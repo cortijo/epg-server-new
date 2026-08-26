@@ -123,7 +123,7 @@ def parse_bit_section(section, errors):
 
 def validate(path, expected_services, expected_tsid, expected_onid,
              epg_only=False, pmt_pids=None, require_logo=False,
-             logo_services=None):
+             logo_services=None, require_content_category=False):
     if isinstance(expected_services, int):
         expected_services = [expected_services]
     expected_services = set(expected_services)
@@ -172,6 +172,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
     bit_onids = set()
     bit_broadcasters = []
     bit_announced_tables = set()
+    content_nibbles = collections.Counter()
     for pid, assembler in assemblers.items():
         for section in assembler.sections:
             table_id = section[0]
@@ -196,6 +197,27 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                         running_status[section_number] = (section[24] >> 5) & 0x07
                 if 0x50 <= table_id <= 0x5F:
                     schedule_tables.add(table_id)
+                event_offset = 14
+                while event_offset + 12 <= len(section) - 4:
+                    descriptors_length = ((section[event_offset + 10] & 0x0F) << 8) | section[event_offset + 11]
+                    descriptor_offset = event_offset + 12
+                    descriptor_end = descriptor_offset + descriptors_length
+                    if descriptor_end > len(section) - 4:
+                        errors.append("EIT possui loop de descritores truncado")
+                        break
+                    while descriptor_offset + 2 <= descriptor_end:
+                        tag = section[descriptor_offset]
+                        length = section[descriptor_offset + 1]
+                        body_end = descriptor_offset + 2 + length
+                        if body_end > descriptor_end:
+                            errors.append("EIT possui descritor truncado")
+                            break
+                        if tag == 0x54:
+                            body = section[descriptor_offset + 2:body_end]
+                            for item in range(0, len(body) - 1, 2):
+                                content_nibbles[body[item]] += 1
+                        descriptor_offset = body_end
+                    event_offset = descriptor_end
             elif table_id == 0x00 and len(section) >= 12:
                 tsid = (section[3] << 8) | section[4]
                 programs = []
@@ -305,6 +327,8 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         errors.append(f"{crc_errors} seções com CRC MPEG inválido")
     if id_errors:
         errors.append(f"{id_errors} ocorrências PSI/SI com SID/TSID/ONID divergentes")
+    if require_content_category and not content_nibbles:
+        errors.append("descritor de categoria 0x54 ausente na EIT")
     # A rolling capture may begin after an earlier packet of the same PID. A
     # single discontinuity at its cut boundary is acceptable; repeated errors
     # indicate a live transport problem.
@@ -393,6 +417,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         "bit_onids": sorted(bit_onids),
         "bit_broadcasters": bit_broadcasters,
         "bit_announced_tables": [f"0x{table:02X}" for table in sorted(bit_announced_tables)],
+        "content_categories": {f"0x{value:02X}": count for value, count in sorted(content_nibbles.items())},
         "continuity_errors": {f"0x{pid:04X}": count for pid, count in sorted(continuity_errors.items())},
         "errors": errors,
     }
@@ -416,11 +441,13 @@ def main():
                         help="exige SDT, BIT anunciando CDT e logo no PID 0x0029")
     parser.add_argument("--logo-service-id", type=int, action="append",
                         help="SID que deve possuir os seis formatos de logo; repita por canal")
+    parser.add_argument("--require-content-category", action="store_true",
+                        help="exige pelo menos um descritor de conteúdo 0x54 na EIT")
     args = parser.parse_args()
     report = validate(
         args.sample, args.service_id, args.tsid, args.onid,
         args.epg_only, args.pmt_pid or [0x1000], args.require_logo,
-        args.logo_service_id)
+        args.logo_service_id, args.require_content_category)
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["ok"] else 1
 

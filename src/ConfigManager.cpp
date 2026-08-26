@@ -133,6 +133,7 @@ StreamConfig StreamConfig::fromJson(const Json::Value& root) {
     config.epgSourceUrl = root.get("epg_source_url",
         "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml").asString();
     config.epgChannelId = root.get("epg_channel_id", "").asString();
+    config.epgDefaultCategory = root.get("epg_default_category", "").asString();
     if (root.isMember("outputs") && root["outputs"].isArray() && root["outputs"].size() > 0) {
         const auto primary = StreamOutputConfig::fromJson(root["outputs"][0]);
         config.outputType = primary.outputType;
@@ -196,6 +197,7 @@ Json::Value StreamConfig::toJson() const {
     root["epg_source_id"] = epgSourceId;
     root["epg_source_url"] = epgSourceUrl;
     root["epg_channel_id"] = epgChannelId;
+    root["epg_default_category"] = epgDefaultCategory;
     Json::Value extraOutputs(Json::arrayValue);
     for (const auto& output : additionalOutputs) {
         extraOutputs.append(output.toJson());

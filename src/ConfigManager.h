@@ -89,6 +89,8 @@ struct StreamConfig {
     std::string epgSourceId = "braziltvepg";
     std::string epgSourceUrl = "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml";
     std::string epgChannelId;
+    // Optional fallback used only when XMLTV has no recognized category.
+    std::string epgDefaultCategory;
     std::vector<StreamOutputConfig> additionalOutputs;
 
     Json::Value toJson() const;

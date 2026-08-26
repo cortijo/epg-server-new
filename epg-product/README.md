@@ -29,7 +29,7 @@ Execute na raiz do repositório:
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.7.0-20260826 .
+  -t epgserver:v1.8.0-20260826 .
 ```
 
 A imagem compila somente o emissor `TVStreamEpgOnly`. O runtime não contém
@@ -176,6 +176,14 @@ O modulador deve repassar os três PIDs do mesmo input auxiliar. EIT e
 relógio continuam nos PIDs `0x0012` e `0x0014`. A estrutura pode ser auditada
 com `scripts/verify_isdbtb_ts.py --epg-only --logo-service-id SID`; a exibição
 final ainda depende de o receptor implementar download de logo ARIB.
+
+## Categoria dos programas
+
+O emissor converte categorias reconhecidas do XMLTV para o descritor de
+conteúdo `0x54` na EIT. No cadastro de cada canal, **Categoria padrão** funciona
+como fallback somente quando o evento não possuir uma categoria reconhecida.
+O transporte continua no PID `0x0012`; nenhuma linha adicional é necessária no
+PID PASSTHRU do Dexing.
 
 ## Visualização das portadoras
 

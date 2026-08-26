@@ -1,6 +1,6 @@
 services:
   epg-stream:
-    image: epgserver:v1.7.0
+    image: epgserver:v1.8.0
     container_name: epg-stream
     network_mode: host
     restart: unless-stopped

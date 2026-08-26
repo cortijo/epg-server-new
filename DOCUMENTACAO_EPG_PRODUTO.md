@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada: **1.7.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada: **1.8.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -40,6 +40,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.5.0 | grade horizontal por portadora, navegação temporal e detalhes |
 | 1.6.0 | publicações XMLTV normalizadas, versionadas e com URL permanente |
 | 1.7.0 | BIT `0xC4` anuncia CDT de logo pelo descritor SI `0xD7` |
+| 1.8.0 | categoria XMLTV/fallback por canal no descritor EIT `0x54` |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -239,6 +240,11 @@ O agregador nunca intercala pacotes de duas seções EIT. A continuidade é
 reescrita globalmente por PID após combinar serviços. Detalhes de descritores,
 codificação, segmentação, CRC e horários estão em
 [`ARQUITETURA_EPG_MULTICAST_ISDBTB.md`](ARQUITETURA_EPG_MULTICAST_ISDBTB.md).
+
+Cada evento pode transportar o descritor de conteúdo `0x54`. O emissor usa a
+primeira categoria XMLTV reconhecida e, na ausência dela, o campo
+`default_category` configurado no canal. O fallback não substitui uma categoria
+válida da programadora e não exige PID adicional além da EIT `0x0012`.
 
 Cadências atuais do emissor:
 
