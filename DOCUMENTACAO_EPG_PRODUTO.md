@@ -466,10 +466,10 @@ ip route get 239.192.1.201
 
 Restrinja TCP/9100 à administração. Multicast é tráfego de saída.
 
-### 10.3 Estado implantado em 25/08/2026
+### 10.3 Estado implantado em 26/08/2026
 
 ```text
-imagem:    epgserver:v1.8.0-20260826
+imagem:    epgserver:v1.9.0-20260826
 container: epg-stream
 rede:      host
 restart:   unless-stopped
@@ -508,7 +508,15 @@ Rollback imediato da v1.8.0:
 - container: `epg-stream-pre-v1.8.0-20260826-095523`, com a imagem v1.7.0;
 - dados: `/srv/epg-stream-backup-pre-v1.8.0-20260826-095523`.
 
-Validação posterior ao deploy da v1.8.0: health da versão `1.8.0`, autenticação
+Rollback imediato da v1.9.0:
+
+- container: `epg-stream-pre-v1.9.0-20260826-124740`, com a imagem v1.8.0;
+- dados: `/srv/epg-stream-backup-pre-v1.9.0-20260826-123821`.
+
+A implantação concorrente v2.0.0, que retornava erro HTTP 500, foi parada e
+preservada em `epg-stream-disabled-v2.0.0-20260826-125556`.
+
+Validação posterior ao deploy da v1.9.0: health da versão `1.9.0`, autenticação
 administrativa HTTP 200, 27 portadoras em execução, zero portadoras em erro e
 zero reinícios do container.
 

@@ -82,11 +82,11 @@ saída multicast do host. O container não recebe IP próprio de bridge e a port
 HTTP 9100 escuta diretamente nos endereços do servidor. Não use `ports:` ou
 `-p` junto com esse modo.
 
-## Instalação implantada em 25/08/2026
+## Instalação implantada em 26/08/2026
 
 | Item | Valor |
 |---|---|
-| Imagem | `epgserver:v1.8.0-20260826` |
+| Imagem | `epgserver:v1.9.0-20260826` |
 | Container | `epg-stream` |
 | Rede Docker | `host` |
 | HTTP | `9100`, diretamente no host |
@@ -94,12 +94,13 @@ HTTP 9100 escuta diretamente nos endereços do servidor. Não use `ports:` ou
 | Usuário do processo | `10001:10001` |
 | Volume | `/srv/epg-stream:/data` |
 | URL pública XMLTV | `http://181.233.106.46:9100/xmltv/<token>.xml` |
-| Container de rollback | `epg-stream-pre-v1.8.0-20260826-095523` (imagem v1.7.0) |
-| Backup de rollback | `/srv/epg-stream-backup-pre-v1.8.0-20260826-095523` |
+| Container de rollback | `epg-stream-pre-v1.9.0-20260826-124740` (imagem v1.8.0) |
+| Backup de rollback | `/srv/epg-stream-backup-pre-v1.9.0-20260826-123821` |
 
 O deploy foi validado com 27 portadoras ativas, nenhuma em erro e nenhum
-reinício do container. O acesso administrativo `epgadmin` também foi validado
-após a restauração da senha operacional.
+reinício do container. O acesso administrativo `epgadmin` também foi validado.
+A imagem v2.0.0 que apresentou falha ficou parada e preservada como
+`epg-stream-disabled-v2.0.0-20260826-125556`.
 
 Essa tabela registra a implantação atual, mas deve sempre ser confirmada com
 `docker inspect` antes de uma nova alteração.

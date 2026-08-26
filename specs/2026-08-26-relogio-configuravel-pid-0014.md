@@ -1,7 +1,7 @@
 # Relógio e fuso configuráveis no PID 0x0014
 
 - ID: `2026-08-26-relogio-configuravel-pid-0014`
-- Estado: `validando`
+- Estado: `concluída`
 - Responsável: Codex
 - Solicitante: Julio Cortijo
 - Criada em: `2026-08-26`
@@ -117,7 +117,7 @@ relógio do host + correção -> deslocamento civil -> TDT/TOT 0x0014
 - [x] Propagar configuração ao emissor.
 - [x] Atualizar auditor e documentação.
 - [x] Executar testes, build e captura isolada.
-- [ ] Implantar com rollback preservado.
+- [x] Implantar com rollback preservado.
 
 ## 12. Matriz de validação
 
@@ -127,7 +127,7 @@ relógio do host + correção -> deslocamento civil -> TDT/TOT 0x0014
 | T-02 | Build C++/Docker | Linux isolado | imagem candidata compila | passou |
 | T-03 | Modo padrão | multicast isolado | comportamento UTC-03:00 atual | passou |
 | T-04 | Modo personalizado | multicast isolado | TOT -04:00 e correção +30 min | passou |
-| T-05 | Produção | servidor | health, login e 27 portadoras saudáveis | pendente |
+| T-05 | Produção | servidor | health, login e 27 portadoras saudáveis | passou |
 
 ## 13. Implantação e rollback
 
@@ -136,6 +136,9 @@ relógio do host + correção -> deslocamento civil -> TDT/TOT 0x0014
 - A candidata usará porta HTTP, volume e multicast exclusivos.
 - O container e o volume da v1.8.0 serão preservados para rollback.
 - Rollback: remover somente a v1.9.0, renomear e iniciar o container anterior.
+- Imagem implantada: `epgserver:v1.9.0-20260826`.
+- Rollback preservado: `epg-stream-pre-v1.9.0-20260826-124740` e
+  `/srv/epg-stream-backup-pre-v1.9.0-20260826-123821`.
 
 ## 14. Registro de execução
 
@@ -148,9 +151,15 @@ relógio do host + correção -> deslocamento civil -> TDT/TOT 0x0014
 | 2026-08-26 | captura padrão | TSID/ONID 91, SID 2901, TOT -03:00, deslocamento observado -180,8 min, CRC/continuidade sem erro |
 | 2026-08-26 | captura personalizada | TSID/ONID 92, SID 2901, TOT -04:00, deslocamento observado -210,7 min, CRC/continuidade sem erro |
 | 2026-08-26 | candidato web | health 1.9.0, API persistiu fuso/correção e manteve dados após restart |
+| 2026-08-26 | produção | health 1.9.0, login HTTP 200, 27/27 portadoras em execução, zero erros e zero reinícios |
+| 2026-08-26 | concorrência | v2.0.0 com erro HTTP 500 foi parada e preservada; v1.9.0 reassumiu a porta 9100 |
 
 ## 15. Resultado final
 
-- Estado final: em andamento
+- Estado final: concluído
 - Critérios de aceite: 5/5 concluídos
-- Commit/tag/imagem/rollback: a preencher
+- Commit: `31a951f277d8e8c570812f6fc2fb27815097b644`
+- Tag: `epg-v1.9.0`
+- Imagem: `epgserver:v1.9.0-20260826`
+- Rollback: `epg-stream-pre-v1.9.0-20260826-124740` e
+  `/srv/epg-stream-backup-pre-v1.9.0-20260826-123821`
