@@ -24,6 +24,12 @@ O EPG Server administra XMLTV e gera um MPEG-TS auxiliar com PSI/SI e EPG.
 Ele não processa vídeo ou áudio. A imagem Docker compila apenas
 `TVStreamEpgOnly` e executa o painel Python.
 
+A partir da versão 1.6, o painel também mantém publicações XMLTV em
+`/data/xmltv-publications`. Em manutenção desse módulo, preserve o token/URL da
+publicação, as versões anteriores e a seleção por vigência. Nunca trate o nome
+original do upload como caminho de arquivo e valide o XML normalizado tanto no
+painel quanto no emissor C++.
+
 ## 2. Diagnóstico antes da alteração
 
 1. Leia a documentação e a spec atual.

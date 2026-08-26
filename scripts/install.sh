@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PRODUCT_VERSION="1.5.0"
+PRODUCT_VERSION="1.6.0"
 DEFAULT_PORT="9100"
 DEFAULT_DATA_DIR="/srv/epg-stream"
 DEFAULT_CONTAINER="epg-stream"
@@ -97,6 +97,9 @@ validate_inputs() {
   [[ "${IMAGE_TAG}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || die "Tag de imagem inválida."
   [[ "${IMAGE_TAG##*:}" != "latest" ]] || die "A tag latest não é permitida; use uma versão imutável."
   [[ "${TIMEZONE}" =~ ^[a-zA-Z0-9_+/-]+$ ]] || die "Fuso horário inválido."
+  if [[ -n "${PUBLIC_BASE_URL}" && ! "${PUBLIC_BASE_URL}" =~ ^https?://[^/]+$ ]]; then
+    die "A URL pública deve usar http(s) e não pode conter caminho."
+  fi
 }
 
 container_exists() {
@@ -172,6 +175,9 @@ run_application() {
     --env "TZ=${TIMEZONE}"
     --volume "${DATA_DIR}:/data"
   )
+  if [[ -n "${PUBLIC_BASE_URL}" ]]; then
+    args+=(--env "EPG_PUBLIC_BASE_URL=${PUBLIC_BASE_URL}")
+  fi
   if [[ -n "${env_file}" ]]; then
     args+=(--env-file "${env_file}")
   fi
@@ -229,6 +235,8 @@ main() {
   ask_default CONTAINER_NAME "Nome do container" "${DEFAULT_CONTAINER}"
   ask_default IMAGE_TAG "Nome e tag imutável da imagem" "${DEFAULT_IMAGE}"
   ask_default TIMEZONE "Fuso horário" "${DEFAULT_TIMEZONE}"
+  ask_default PUBLIC_BASE_URL "URL pública base (opcional, ex.: http://IP:PORTA)" ""
+  PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
   validate_inputs
 
   local updating=false previous_container="" backup_dir="" stamp

@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada: **1.5.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada: **1.6.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -38,6 +38,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.3.1 | visualização autenticada do logo no painel |
 | 1.4.0 | logo estrito ISDB-TB/ARIB: seis formatos, SDT `0xCF` e CDT `0xC8` |
 | 1.5.0 | grade horizontal por portadora, navegação temporal e detalhes |
+| 1.6.0 | publicações XMLTV normalizadas, versionadas e com URL permanente |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -49,6 +50,7 @@ uma tag existente nem publique outra imagem com a mesma tag.
 | Painel/API | `epg-product/app.py` | autenticação, HTTP, CRUD e visão ao vivo |
 | Store | `epg-product/app.py` | JSON atômico e schema do produto |
 | GuideCache | `epg-product/app.py` | download, gzip, parsing e cache XMLTV |
+| Publicações XMLTV | `epg-product/app.py` | upload, normalização, vigência e URL estável |
 | Supervisor | `epg-product/app.py` | processos, auto-start, restart e logs |
 | Emissor | `src/EpgOnlyMain.cpp` | sinalização, shaping CBR e socket multicast |
 | Gerador EPG | `src/EpgInjector.cpp` | XMLTV, descritores, EIT, TDT e TOT |
@@ -83,15 +85,15 @@ três segundos; uma parada manual suspende essa recuperação até nova ação.
 
 ## 3. Modelo de dados
 
-O arquivo `/data/epg-product.json` possui `schema_version`, `users`, `sources` e
-`carriers`. A gravação ocorre em arquivo temporário, com `fsync`, seguida de
+O arquivo `/data/epg-product.json` possui `schema_version`, `users`, `sources`,
+`carriers` e `xmltv_publications`. A gravação ocorre em arquivo temporário, com `fsync`, seguida de
 troca atômica. O arquivo final recebe permissão `0600`.
 
 Exemplo sanitizado:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "users": [{
     "id": "user-EXEMPLO",
     "username": "administrador",
@@ -156,6 +158,12 @@ Toda gravação passa por normalização e validação no servidor. Campos inter
 como versão de sinalização, caminhos de logo e hashes, não devem ser aceitos
 como autoridade quando vierem do navegador.
 
+Cada item de `xmltv_publications` mantém `id`, nome, token aleatório e uma lista
+de versões. A versão contém vigência epoch UTC, hash SHA-256, contagens,
+estatísticas de correção e caminho interno. Os XML normalizados ficam em
+`/data/xmltv-publications/<publication-id>/<version-id>.xml`. Caminho e token
+nunca são aceitos do navegador.
+
 ## 4. XMLTV e programação em tempo real
 
 O cache aceita HTTP/HTTPS e detecta gzip pela extensão ou magic bytes. O limite
@@ -182,6 +190,33 @@ O painel atualiza estado e guia a cada 15 segundos. Isso é tempo real em relaç
 Ao editar um canal, a lista do ID XMLTV deve ser obtida da fonte escolhida
 naquele próprio canal. Alterar a fonte padrão não deve substituir escolhas
 individuais já salvas.
+
+### 4.1 Publicações XMLTV versionadas
+
+O módulo **Publicações XMLTV** recebe XML, XMLTV ou GZIP autenticado com limite
+de 96 MiB. O conversor lê o documento completo, exige raiz `<tv>` e executa:
+
+1. consolidação de declarações repetidas de canal;
+2. inclusão de `-0300` em timestamps sem offset;
+3. preservação de timestamps com `Z` ou `±HHMM`;
+4. reconciliação de `programme@channel` pelo prefixo numérico quando existe um
+   único `<channel id>` candidato;
+5. criação de declaração mínima para referência ainda não declarada;
+6. descarte de programa sem canal, data válida ou duração positiva;
+7. nova validação pelo parser do painel;
+8. gravação atômica e cálculo de SHA-256.
+
+A vigência corresponde ao menor início e maior término dos eventos válidos. A
+URL `/xmltv/<token>.xml` não exige Basic Auth porque é consumida pelo emissor,
+mas utiliza token de 128 bits. A cada GET, o servidor seleciona a versão que
+abrange o instante atual; em sobreposição vence a versão com início mais novo.
+Sem versão vigente, entrega a próxima e, sem futura, a expirada mais recente.
+Assim a URL não muda e a rotação não depende de cron. O cache de fontes pode
+postergar a percepção da troca por até 300 segundos.
+
+`EPG_PUBLIC_BASE_URL` é opcional e deve conter somente esquema e autoridade,
+por exemplo `http://181.233.106.46:9100`. Quando definido, o painel usa essa
+base no botão **Copiar URL**; sem ela, usa a origem atual do navegador.
 
 ## 5. Transporte ISDB-TB
 
@@ -260,11 +295,13 @@ Não registre essas variáveis: fontes comerciais podem conter credenciais.
 
 ## 7. API
 
-Todos os endpoints, exceto `/health`, usam HTTP Basic.
+Todos os endpoints, exceto `/health` e a URL pública `/xmltv/TOKEN.xml`, usam
+HTTP Basic.
 
 | Método | Endpoint | Função |
 |---|---|---|
 | GET | `/health` | saúde e versão |
+| GET | `/xmltv/TOKEN.xml` | XMLTV normalizado selecionado, sem autenticação |
 | GET | `/` | painel web autenticado |
 | GET | `/api/session` | usuário autenticado e perfil |
 | GET | `/api/users` | listar usuários (somente administrador) |
@@ -272,6 +309,11 @@ Todos os endpoints, exceto `/health`, usam HTTP Basic.
 | POST | `/api/users/delete` | excluir usuário (somente administrador) |
 | GET | `/api/state` | portadoras e runtime, sem URLs |
 | GET | `/api/sources` | fontes para administração |
+| GET | `/api/publications` | publicações, versões, vigências e situação |
+| POST | `/api/publications` | criar ou renomear publicação |
+| POST | `/api/publications/upload?id=ID&filename=NOME` | upload XMLTV bruto, até 96 MiB |
+| POST | `/api/publications/version/delete` | excluir uma versão e recalcular seleção |
+| POST | `/api/publications/delete` | excluir arquivos e invalidar a URL |
 | GET | `/api/logo?carrier_id=ID&service_id=ID` | miniatura PNG autenticada |
 | POST | `/api/sources` | criar/editar fonte |
 | POST | `/api/sources/test` | baixar e contar fonte |
@@ -290,6 +332,8 @@ Todos os endpoints, exceto `/health`, usam HTTP Basic.
 Mutações recebem JSON e retornam `{"result":"ok"}` ou status 4xx/5xx com
 `{"error":"mensagem"}`. Corpo vazio ou acima de 3 MiB e Origin divergente são
 rejeitados. A API de logo recebe PNG em data URL/base64 dentro desse envelope.
+O endpoint de upload XMLTV é a única mutação que recebe corpo binário bruto e
+usa o limite específico de 96 MiB.
 
 As ações dinâmicas aceitas em `/api/carriers/<ação>` são somente `start`,
 `stop` e `restart`. Qualquer outra rota deve retornar 404.
@@ -340,7 +384,7 @@ sudo ./scripts/install.sh
 ```
 
 O instalador solicita a porta HTTP, diretório persistente, nome do container,
-tag imutável da imagem, fuso e, em volume vazio, as credenciais do primeiro
+tag imutável da imagem, fuso, URL pública opcional e, em volume vazio, as credenciais do primeiro
 administrador. Ele recusa `latest`, tags locais já existentes, caminhos de dados
 relativos, nomes inválidos e portas fora do intervalo permitido.
 

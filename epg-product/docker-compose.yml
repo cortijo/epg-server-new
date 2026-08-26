@@ -1,6 +1,6 @@
 services:
   epg-stream:
-    image: epgserver:v1.5.0
+    image: epgserver:v1.6.0
     container_name: epg-stream
     network_mode: host
     restart: unless-stopped
@@ -9,6 +9,7 @@ services:
       EPG_ADMIN_USER: ${EPG_ADMIN_USER:-}
       EPG_ADMIN_PASSWORD: ${EPG_ADMIN_PASSWORD:-}
       EPG_HTTP_PORT: ${EPG_HTTP_PORT:-9100}
+      EPG_PUBLIC_BASE_URL: ${EPG_PUBLIC_BASE_URL:-}
       TZ: America/Sao_Paulo
     volumes:
       - /srv/epg-stream:/data

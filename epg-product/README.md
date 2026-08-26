@@ -8,6 +8,7 @@ combina aos canais já existentes.
 ## Recursos
 
 - fontes XMLTV HTTP/HTTPS, inclusive `.gz`;
+- upload, normalização e publicação versionada de XMLTV em URL permanente;
 - BrazilTVEPG criado como fonte padrão;
 - uma saída multicast por portadora, com 1 a 64 serviços;
 - fonte XMLTV própria por serviço, com herança da fonte padrão da portadora;
@@ -28,7 +29,7 @@ Execute na raiz do repositório:
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t tvstream-epg:v1.5.0-20260825 .
+  -t epgserver:v1.6.0-20260825 .
 ```
 
 A imagem compila somente o emissor `TVStreamEpgOnly`. O runtime não contém
@@ -113,6 +114,40 @@ Essa tabela registra a implantação atual, mas deve sempre ser confirmada com
 
 Uma portadora usa um multicast EPG auxiliar. Ela não precisa de um multicast
 por canal.
+
+## XMLTV enviado pela programadora
+
+Abra **Publicações XMLTV**, crie uma publicação e envie o arquivo `.xml`,
+`.xmltv` ou `.gz`. Cada publicação possui uma URL aleatória permanente no
+formato:
+
+```text
+http://IP_DO_SERVIDOR:9100/xmltv/TOKEN.xml
+```
+
+Se o painel for aberto por proxy, túnel ou endereço `localhost`, defina
+`EPG_PUBLIC_BASE_URL=http://IP_DO_SERVIDOR:9100` no container para que o botão
+**Copiar URL** sempre use o endereço alcançável pelo emissor.
+
+Copie essa URL e cadastre-a em **Fontes XMLTV**. Nos uploads seguintes, use a
+mesma publicação; não crie outra fonte. A vigência é calculada pelo primeiro
+`start` e último `stop` válidos. A cada acesso, a URL entrega a versão vigente;
+se ainda não começou, entrega a próxima e, se todas expiraram, mantém a última
+disponível até o envio da nova grade.
+
+Durante o upload, o sistema:
+
+- acrescenta `-0300` a datas XMLTV sem fuso;
+- preserva datas que já possuem `Z` ou `±HHMM`;
+- reconcilia o ID usado em `<programme channel>` com o `<channel id>` quando o
+  prefixo numérico identifica um único canal;
+- cria uma declaração mínima para IDs válidos ainda não declarados;
+- remove canais duplicados e eventos com duração nula, negativa ou data inválida;
+- valida novamente o XML resultante antes de publicá-lo.
+
+Os arquivos ficam em `/data/xmltv-publications`. O upload aceita no máximo
+96 MiB e exige autenticação; somente a URL longa com token é pública. Excluir a
+publicação invalida definitivamente sua URL.
 
 ## Logotipo ISDB-TB / ARIB
 

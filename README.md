@@ -7,6 +7,7 @@ transcodifica e não retransmite vídeo ou áudio.
 ## Componentes
 
 - `epg-product/app.py`: painel web, autenticação, usuários, fontes e portadoras;
+- `epg-product/app.py`: publicações XMLTV versionadas com URL permanente;
 - `src/EpgOnlyMain.cpp`: emissor MPEG-TS EPG-only;
 - `src/EpgInjector.cpp`: XMLTV, EIT, TDT e TOT;
 - `scripts/`: auditorias de relógio e PSI/SI ISDB-TB;
@@ -18,7 +19,7 @@ transcodifica e não retransmite vídeo ou áudio.
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.5.0 .
+  -t epgserver:v1.6.0 .
 ```
 
 ## Primeira execução
@@ -33,7 +34,7 @@ sudo ./scripts/install.sh
 ```
 
 O instalador verifica o Docker, solicita porta, volume, container, tag da
-imagem, fuso horário e, somente em volume vazio, o primeiro administrador. Em
+imagem, fuso, URL pública opcional e, somente em volume vazio, o primeiro administrador. Em
 seguida compila, inicia, valida `/health` e recria o container sem manter as
 credenciais iniciais no ambiente. Ao detectar uma instalação anterior, ele
 constrói primeiro, faz backup, preserva o container antigo e oferece rollback
@@ -67,7 +68,15 @@ python3 scripts/verify_isdbtb_ts.py --help
 python3 scripts/verify_epg_clock.py --help
 ```
 
-## Estado conhecido da versão 1.5.0
+## Publicações XMLTV da programadora
+
+Em **Publicações XMLTV**, crie uma publicação e envie os arquivos periódicos da
+programadora. O sistema acrescenta `-0300` aos horários sem fuso, reconcilia
+IDs pelo código numérico do canal, descarta eventos sem duração e publica todas
+as versões em uma única URL. A URL escolhe automaticamente a grade vigente e
+permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
+
+## Estado conhecido da versão 1.6.0
 
 - EIT, TDT/TOT, SDT e CDT de logo são emitidos e possuem auditoria;
 - o logo usa descritor SDT `0xCF` e CDT `0xC8` no PID `0x0029`;

@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (
     ApiError, Application, INDEX_HTML, Store, parse_xmltv, parse_xmltv_datetime,
-    password_matches, password_record, validate_carrier,
+    normalize_uploaded_xmltv, password_matches, password_record,
+    select_publication_version, validate_carrier,
 )
 
 
@@ -63,6 +64,61 @@ class EpgProductTests(unittest.TestCase):
             store.save()
             self.assertEqual(Store(path).data["carriers"][0]["id"], "one")
             json.loads(path.read_text(encoding="utf-8"))
+
+    def test_provider_xmltv_is_normalized_for_both_parsers(self):
+        payload = '''<?xml version="1.0" encoding="UTF-8"?><tv>
+          <channel id="0121 TELECINE PREMIUM"><display-name>Telecine Premium</display-name></channel>
+          <channel id="0121 TELECINE PREMIUM"><display-name>Duplicado</display-name></channel>
+          <programme channel="0121 TC PREMIUM" start="20260825000000" stop="20260825020000"><title>Filme</title></programme>
+          <programme channel="0121 TC PREMIUM" start="20260825020000" stop="20260825020000"><title>Invalido</title></programme>
+        </tv>'''.encode("utf-8")
+        normalized, stats = normalize_uploaded_xmltv(payload)
+        root = __import__("xml.etree.ElementTree", fromlist=["ElementTree"]).fromstring(normalized)
+        channels = root.findall("channel")
+        programmes = root.findall("programme")
+        self.assertEqual([item.get("id") for item in channels], ["0121 TELECINE PREMIUM"])
+        self.assertEqual(len(programmes), 1)
+        self.assertEqual(programmes[0].get("channel"), "0121 TELECINE PREMIUM")
+        self.assertEqual(programmes[0].get("start"), "20260825000000 -0300")
+        self.assertEqual(programmes[0].get("stop"), "20260825020000 -0300")
+        self.assertEqual(stats["channel_refs_rewritten"], 2)
+        self.assertEqual(stats["duplicate_channels_removed"], 1)
+        self.assertEqual(stats["invalid_programmes_removed"], 1)
+        self.assertEqual(stats["timezone_added"], 2)
+        self.assertEqual(sum(map(len, parse_xmltv(normalized)["programmes"].values())), 1)
+
+    def test_publication_version_rotation_keeps_one_stable_feed(self):
+        versions = [
+            {"id": "old", "valid_from": 100, "valid_until": 200, "uploaded_at": 1},
+            {"id": "current", "valid_from": 200, "valid_until": 300, "uploaded_at": 2},
+            {"id": "next", "valid_from": 300, "valid_until": 400, "uploaded_at": 3},
+        ]
+        self.assertEqual(select_publication_version(versions, 250)["id"], "current")
+        self.assertEqual(select_publication_version(versions, 50)["id"], "old")
+        self.assertEqual(select_publication_version(versions, 450)["id"], "next")
+
+    def test_publication_upload_persists_normalized_version_and_stable_token(self):
+        payload = b'''<tv><channel id="0001 CANAL"><display-name>Canal</display-name></channel>
+          <programme channel="0001 CANAL" start="20260825000000" stop="20260826000000"><title>Grade</title></programme></tv>'''
+        with tempfile.TemporaryDirectory() as directory:
+            app = Application.__new__(Application)
+            app.data_dir = Path(directory)
+            app.publication_dir = Path(directory) / "xmltv-publications"
+            app.public_base_url = "http://epg.example:9100"
+            app.publication_dir.mkdir()
+            app.store = Store(Path(directory) / "epg-product.json")
+            created = app.save_publication({"name": "Programadora"})
+            first_path = created["public_path"]
+            uploaded = app.upload_publication(created["id"], "guide.xml", payload)
+            self.assertEqual(uploaded["version"]["programmes"], 1)
+            listed = app.publications()[0]
+            self.assertEqual(listed["public_path"], first_path)
+            self.assertEqual(listed["public_url"], "http://epg.example:9100" + first_path)
+            self.assertNotIn("path", listed["versions"][0])
+            token = first_path.rsplit("/", 1)[-1].removesuffix(".xml")
+            served, metadata = app.publication_payload(token)
+            self.assertIn(b" -0300", served)
+            self.assertEqual(metadata["filename"], "guide.xml")
 
     def test_password_is_hashed_and_verified(self):
         record = password_record("Senha-forte-123")
@@ -136,6 +192,12 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('class="timeline-program', INDEX_HTML)
         self.assertIn('class="timeline-now"', INDEX_HTML)
         self.assertIn("function openTimelineProgram(serviceId,start)", INDEX_HTML)
+
+    def test_publications_ui_has_raw_upload_and_stable_url(self):
+        self.assertIn('onclick="openPublications()">Publicações XMLTV', INDEX_HTML)
+        self.assertIn("function publicationCard(p)", INDEX_HTML)
+        self.assertIn("/api/publications/upload?id=", INDEX_HTML)
+        self.assertIn("URL permanente", INDEX_HTML)
 
 
 if __name__ == "__main__":

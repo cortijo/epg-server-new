@@ -30,7 +30,7 @@ constexpr std::uint64_t kCarouselPauseNs = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kClockIntervalNs = 5ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kPresentFollowingCycleNs = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::int64_t kBrazilUtcOffsetSeconds = -3 * 60 * 60;
-constexpr std::size_t kMaximumXmlBytes = 64ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kMaximumXmlBytes = 96ULL * 1024ULL * 1024ULL;
 
 std::mutex gEpgAuditMutex;
 std::map<std::string, EpgAuditSnapshot> gEpgAuditSnapshots;

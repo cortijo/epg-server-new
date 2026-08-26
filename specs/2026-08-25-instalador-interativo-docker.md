@@ -15,7 +15,7 @@ valide a saúde da aplicação com o mínimo de intervenção manual.
 - instalação interativa em Linux com Bash;
 - verificação do Docker e instalação opcional em Debian/Ubuntu;
 - coleta e validação de porta, diretório persistente, container, imagem, fuso e
-  credenciais do primeiro administrador;
+  URL pública opcional e credenciais do primeiro administrador;
 - build local com tag imutável, sem uso de `latest`;
 - execução em rede `host`, usuário sem privilégios, filesystem somente leitura,
   capabilities removidas e política de reinício;

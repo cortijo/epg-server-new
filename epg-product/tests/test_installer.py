@@ -44,6 +44,10 @@ class InstallerTests(unittest.TestCase):
     def test_help_documents_no_firewall_mutation(self):
         self.assertIn("Ele não altera o firewall do servidor.", self.script)
 
+    def test_installer_supports_stable_public_base_url(self):
+        self.assertIn("URL pública base", self.script)
+        self.assertIn('EPG_PUBLIC_BASE_URL=${PUBLIC_BASE_URL}', self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

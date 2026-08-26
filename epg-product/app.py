@@ -33,7 +33,7 @@ from PIL import Image
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.5.0"
+PRODUCT_VERSION = "1.6.0"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",
@@ -175,6 +175,146 @@ def parse_xmltv(payload: bytes) -> dict[str, Any]:
     for items in programmes.values():
         items.sort(key=lambda item: (item["start"], item["stop"]))
     return {"channels": channels, "programmes": programmes}
+
+
+def _local_tag(element: ET.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _numeric_channel_prefix(value: str) -> str:
+    match = re.match(r"^\s*(\d{3,6})(?:\s|$)", value or "")
+    return match.group(1) if match else ""
+
+
+def _normalized_xmltv_time(value: str) -> tuple[str, bool]:
+    text = (value or "").strip()
+    if re.fullmatch(r"\d{14}", text):
+        text += " -0300"
+        added = True
+    else:
+        added = False
+    # Use the same validation and offset semantics as the panel.
+    parse_xmltv_datetime(text)
+    return text, added
+
+
+def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Normalize a provider XMLTV into the strict feed consumed by both parsers."""
+    if payload[:2] == b"\x1f\x8b":
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(payload)) as compressed:
+                payload = compressed.read(MAX_XMLTV + 1)
+        except (OSError, EOFError) as error:
+            raise ApiError(f"Arquivo GZIP inválido: {error}")
+    if not payload or len(payload) > MAX_XMLTV:
+        raise ApiError("O XMLTV vazio ou descompactado excede o limite de 96 MiB")
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as error:
+        raise ApiError(f"XMLTV inválido: {error}")
+    if _local_tag(root) != "tv":
+        raise ApiError("O arquivo precisa possuir o elemento raiz <tv>")
+
+    stats: dict[str, Any] = {
+        "channels_original": 0, "channels": 0, "programmes_original": 0,
+        "programmes": 0, "timezone_added": 0, "channel_refs_rewritten": 0,
+        "channels_synthesized": 0, "duplicate_channels_removed": 0,
+        "invalid_programmes_removed": 0,
+    }
+    declared: dict[str, ET.Element] = {}
+    prefix_candidates: dict[str, set[str]] = {}
+    for child in list(root):
+        if _local_tag(child) != "channel":
+            continue
+        stats["channels_original"] += 1
+        channel_id = (child.get("id") or "").strip()
+        if not channel_id or channel_id in declared:
+            root.remove(child)
+            stats["duplicate_channels_removed"] += 1
+            continue
+        child.set("id", channel_id)
+        declared[channel_id] = child
+        prefix = _numeric_channel_prefix(channel_id)
+        if prefix:
+            prefix_candidates.setdefault(prefix, set()).add(channel_id)
+
+    valid_moments: list[datetime] = []
+    unresolved: set[str] = set()
+    for child in list(root):
+        if _local_tag(child) != "programme":
+            continue
+        stats["programmes_original"] += 1
+        channel_id = (child.get("channel") or "").strip()
+        if channel_id not in declared:
+            candidates = prefix_candidates.get(_numeric_channel_prefix(channel_id), set())
+            if len(candidates) == 1:
+                replacement = next(iter(candidates))
+                if replacement != channel_id:
+                    child.set("channel", replacement)
+                    channel_id = replacement
+                    stats["channel_refs_rewritten"] += 1
+            elif channel_id:
+                unresolved.add(channel_id)
+        try:
+            start_text, start_added = _normalized_xmltv_time(child.get("start") or "")
+            stop_text, stop_added = _normalized_xmltv_time(child.get("stop") or "")
+            start = parse_xmltv_datetime(start_text)
+            stop = parse_xmltv_datetime(stop_text)
+            if not channel_id or stop <= start:
+                raise ValueError("evento sem canal ou duração válida")
+        except ValueError:
+            root.remove(child)
+            stats["invalid_programmes_removed"] += 1
+            continue
+        child.set("channel", channel_id)
+        child.set("start", start_text)
+        child.set("stop", stop_text)
+        stats["timezone_added"] += int(start_added) + int(stop_added)
+        stats["programmes"] += 1
+        valid_moments.extend((start, stop))
+
+    # C++ requires a matching <channel> declaration. Preserve otherwise valid
+    # provider events by synthesizing only the declarations still missing.
+    for channel_id in sorted(unresolved):
+        if channel_id in declared:
+            continue
+        element = ET.Element("channel", {"id": channel_id})
+        ET.SubElement(element, "display-name", {"lang": "pt"}).text = channel_id
+        root.insert(len(declared), element)
+        declared[channel_id] = element
+        stats["channels_synthesized"] += 1
+
+    if not valid_moments or not stats["programmes"]:
+        raise ApiError("O XMLTV não possui programas válidos")
+    stats["channels"] = len(declared)
+    stats["valid_from"] = int(min(valid_moments).timestamp())
+    stats["valid_until"] = int(max(valid_moments).timestamp())
+    try:
+        ET.indent(root, space="  ")
+    except AttributeError:
+        pass
+    normalized = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    if len(normalized) > MAX_XMLTV:
+        raise ApiError("O XMLTV normalizado excede o limite de 96 MiB")
+    parsed = parse_xmltv(normalized)
+    parsed_count = sum(map(len, parsed["programmes"].values()))
+    if parsed_count != stats["programmes"]:
+        raise ApiError("A validação do XMLTV normalizado encontrou divergência na programação")
+    stats["bytes"] = len(normalized)
+    return normalized, stats
+
+
+def select_publication_version(versions: list[dict[str, Any]], at: int | None = None) -> dict[str, Any] | None:
+    if not versions:
+        return None
+    current = now_epoch() if at is None else int(at)
+    active = [item for item in versions if int(item["valid_from"]) <= current < int(item["valid_until"])]
+    if active:
+        return max(active, key=lambda item: (int(item["valid_from"]), int(item.get("uploaded_at", 0))))
+    future = [item for item in versions if int(item["valid_from"]) > current]
+    if future:
+        return min(future, key=lambda item: (int(item["valid_from"]), -int(item.get("uploaded_at", 0))))
+    return max(versions, key=lambda item: (int(item["valid_until"]), int(item.get("uploaded_at", 0))))
 
 
 def validate_source(source: dict[str, Any]) -> dict[str, Any]:
@@ -406,10 +546,12 @@ class Store:
             else:
                 loaded = {}
             self.data = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "sources": loaded.get("sources") or [copy.deepcopy(DEFAULT_SOURCE)],
                 "carriers": loaded.get("carriers") or [],
                 "users": loaded.get("users") if isinstance(loaded.get("users"), list) else [],
+                "xmltv_publications": loaded.get("xmltv_publications")
+                if isinstance(loaded.get("xmltv_publications"), list) else [],
             }
             self.save()
 
@@ -640,10 +782,14 @@ class Supervisor:
 
 class Application:
     def __init__(self, data_dir: Path, binary: str,
-                 bootstrap_user: str = "", bootstrap_password: str = ""):
+                 bootstrap_user: str = "", bootstrap_password: str = "",
+                 public_base_url: str = ""):
         self.data_dir = data_dir
+        self.public_base_url = public_base_url.strip().rstrip("/")
         self.logo_dir = data_dir / "logos"
+        self.publication_dir = data_dir / "xmltv-publications"
         self.logo_dir.mkdir(parents=True, exist_ok=True)
+        self.publication_dir.mkdir(parents=True, exist_ok=True)
         self.store = Store(data_dir / "epg-product.json")
         self._bootstrap_user(bootstrap_user, bootstrap_password)
         self._migrate_logos()
@@ -858,6 +1004,153 @@ class Application:
             self.store.data["sources"] = filtered
             self.store.save()
         self.guides.invalidate(source_id)
+        return {"result": "ok"}
+
+    @staticmethod
+    def _public_version(version: dict[str, Any], current: int, selected_id: str) -> dict[str, Any]:
+        result = {key: copy.deepcopy(value) for key, value in version.items() if key != "path"}
+        if version["id"] == selected_id:
+            result["status"] = "selected"
+        elif int(version["valid_until"]) <= current:
+            result["status"] = "expired"
+        elif int(version["valid_from"]) > current:
+            result["status"] = "future"
+        else:
+            result["status"] = "available"
+        return result
+
+    def publications(self) -> list[dict[str, Any]]:
+        current = now_epoch()
+        result = []
+        for publication in self.store.snapshot()["xmltv_publications"]:
+            selected = select_publication_version(publication.get("versions", []), current)
+            selected_id = selected["id"] if selected else ""
+            public_path = f"/xmltv/{publication['token']}.xml"
+            result.append({
+                "id": publication["id"], "name": publication["name"],
+                "public_path": public_path,
+                "public_url": f"{getattr(self, 'public_base_url', '')}{public_path}"
+                if getattr(self, "public_base_url", "") else "",
+                "created_at": publication.get("created_at", 0),
+                "updated_at": publication.get("updated_at", 0),
+                "selected_version_id": selected_id,
+                "versions": [self._public_version(item, current, selected_id)
+                             for item in sorted(publication.get("versions", []),
+                                                key=lambda value: (value["valid_from"], value.get("uploaded_at", 0)))],
+            })
+        return sorted(result, key=lambda item: item["name"].casefold())
+
+    def save_publication(self, request: dict[str, Any]) -> dict[str, Any]:
+        publication_id = str(request.get("id") or "")
+        name = str(request.get("name") or "").strip()
+        if not 3 <= len(name) <= 100:
+            raise ApiError("O nome da publicação deve possuir de 3 a 100 caracteres")
+        timestamp = now_epoch()
+        with self.store.lock:
+            items = self.store.data["xmltv_publications"]
+            existing = next((item for item in items if item["id"] == publication_id), None)
+            if existing:
+                existing["name"] = name
+                existing["updated_at"] = timestamp
+                saved = existing
+            else:
+                if publication_id:
+                    raise ApiError("Publicação XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+                saved = {
+                    "id": slug_id("publication"), "name": name,
+                    "token": uuid.uuid4().hex, "versions": [],
+                    "created_at": timestamp, "updated_at": timestamp,
+                }
+                items.append(saved)
+            self.store.save()
+        public_path = f"/xmltv/{saved['token']}.xml"
+        return {"result": "ok", "id": saved["id"], "public_path": public_path,
+                "public_url": f"{getattr(self, 'public_base_url', '')}{public_path}"
+                if getattr(self, "public_base_url", "") else ""}
+
+    def upload_publication(self, publication_id: str, filename: str, payload: bytes) -> dict[str, Any]:
+        snapshot = self.store.snapshot()
+        publication = next((item for item in snapshot["xmltv_publications"]
+                            if item["id"] == publication_id), None)
+        if not publication:
+            raise ApiError("Publicação XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+        normalized, stats = normalize_uploaded_xmltv(payload)
+        version_id = slug_id("version")
+        path = self.publication_dir / publication_id / f"{version_id}.xml"
+        self._write_atomic(path, normalized)
+        os.chmod(path, 0o640)
+        timestamp = now_epoch()
+        version = {
+            "id": version_id,
+            "filename": Path(filename or "guide.xml").name[:180] or "guide.xml",
+            "path": str(path), "uploaded_at": timestamp,
+            "sha256": hashlib.sha256(normalized).hexdigest(), **stats,
+        }
+        try:
+            with self.store.lock:
+                stored = next((item for item in self.store.data["xmltv_publications"]
+                               if item["id"] == publication_id), None)
+                if not stored:
+                    raise ApiError("Publicação XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+                stored.setdefault("versions", []).append(version)
+                stored["updated_at"] = timestamp
+                self.store.save()
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        return {"result": "ok", "version": self._public_version(version, timestamp, version_id)}
+
+    def _publication_version_path(self, version: dict[str, Any]) -> Path:
+        path = Path(str(version.get("path") or "")).resolve()
+        if self.publication_dir.resolve() not in path.parents or not path.is_file():
+            raise ApiError("Arquivo XMLTV publicado não foi encontrado", HTTPStatus.NOT_FOUND)
+        return path
+
+    def publication_payload(self, token: str) -> tuple[bytes, dict[str, Any]]:
+        publication = next((item for item in self.store.snapshot()["xmltv_publications"]
+                            if hmac.compare_digest(str(item.get("token", "")), token)), None)
+        if not publication:
+            raise ApiError("Publicação XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+        selected = select_publication_version(publication.get("versions", []))
+        if not selected:
+            raise ApiError("A publicação XMLTV ainda não possui arquivos", HTTPStatus.NOT_FOUND)
+        return self._publication_version_path(selected).read_bytes(), selected
+
+    def delete_publication_version(self, publication_id: str, version_id: str) -> dict[str, Any]:
+        removed: dict[str, Any] | None = None
+        with self.store.lock:
+            publication = next((item for item in self.store.data["xmltv_publications"]
+                                if item["id"] == publication_id), None)
+            if not publication:
+                raise ApiError("Publicação XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+            versions = publication.get("versions", [])
+            removed = next((item for item in versions if item["id"] == version_id), None)
+            if not removed:
+                raise ApiError("Versão XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+            publication["versions"] = [item for item in versions if item["id"] != version_id]
+            publication["updated_at"] = now_epoch()
+            self.store.save()
+        path = Path(str(removed.get("path") or "")).resolve()
+        if path.is_file() and self.publication_dir.resolve() in path.parents:
+            path.unlink()
+        return {"result": "ok"}
+
+    def delete_publication(self, publication_id: str) -> dict[str, Any]:
+        removed: dict[str, Any] | None = None
+        with self.store.lock:
+            removed = next((item for item in self.store.data["xmltv_publications"]
+                            if item["id"] == publication_id), None)
+            if not removed:
+                raise ApiError("Publicação XMLTV não encontrada", HTTPStatus.NOT_FOUND)
+            self.store.data["xmltv_publications"] = [item for item in self.store.data["xmltv_publications"]
+                                                      if item["id"] != publication_id]
+            self.store.save()
+        directory = (self.publication_dir / publication_id).resolve()
+        if directory.is_dir() and self.publication_dir.resolve() in directory.parents:
+            for path in directory.iterdir():
+                if path.is_file():
+                    path.unlink()
+            directory.rmdir()
         return {"result": "ok"}
 
     def save_carrier(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -1098,6 +1391,18 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError("O corpo deve ser um objeto JSON")
         return value
 
+    def _raw_body(self, limit: int) -> bytes:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ApiError("Content-Length inválido")
+        if length <= 0 or length > limit:
+            raise ApiError(f"O arquivo deve possuir no máximo {limit // (1024 * 1024)} MiB")
+        payload = self.rfile.read(length)
+        if len(payload) != length:
+            raise ApiError("O upload XMLTV foi interrompido")
+        return payload
+
     def _query(self) -> dict[str, list[str]]:
         return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
@@ -1107,6 +1412,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/health":
                 self._json({"status": "ok", "product": PRODUCT_NAME, "version": PRODUCT_VERSION})
+                return
+            public_match = re.fullmatch(r"/xmltv/([a-f0-9]{32})\.xml", path)
+            if public_match:
+                payload, version = APP.publication_payload(public_match.group(1))
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, max-age=0, must-revalidate")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-XMLTV-Version", str(version["id"]))
+                self.send_header("X-XMLTV-Valid-Until", str(version["valid_until"]))
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
                 return
             if not self._require_auth():
                 return
@@ -1131,6 +1449,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"users": APP.users()})
             elif path == "/api/sources":
                 self._json({"sources": APP.store.snapshot()["sources"]})
+            elif path == "/api/publications":
+                self._json({"publications": APP.publications()})
             elif path == "/api/logo":
                 query = self._query()
                 payload = APP.logo_file(
@@ -1173,6 +1493,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Origem da requisição não permitida"}, HTTPStatus.FORBIDDEN)
             return
         try:
+            if path == "/api/publications/upload":
+                query = self._query()
+                publication_id = query.get("id", [""])[0]
+                filename = query.get("filename", ["guide.xml"])[0]
+                result = APP.upload_publication(publication_id, filename, self._raw_body(MAX_XMLTV))
+                self._json(result)
+                return
             request = self._body()
             if path == "/api/users":
                 self._require_admin()
@@ -1188,6 +1515,14 @@ class Handler(BaseHTTPRequestHandler):
                 result = {"result": "ok", "channels": len(guide["channels"]), "programmes": sum(map(len, guide["programmes"].values())), "bytes": guide["bytes"]}
             elif path == "/api/sources/delete":
                 result = APP.delete_source(str(request.get("id") or ""))
+            elif path == "/api/publications":
+                result = APP.save_publication(request)
+            elif path == "/api/publications/version/delete":
+                result = APP.delete_publication_version(
+                    str(request.get("publication_id") or ""), str(request.get("version_id") or "")
+                )
+            elif path == "/api/publications/delete":
+                result = APP.delete_publication(str(request.get("id") or ""))
             elif path == "/api/carriers":
                 result = APP.save_carrier(request)
             elif path == "/api/carriers/logo":
@@ -1213,11 +1548,12 @@ INDEX_HTML = r'''<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>EPG Stream</title><style>
 :root{--navy:#071b33;--blue:#087ec1;--cyan:#1bb6e8;--bg:#f2f6fa;--card:#fff;--text:#14263a;--muted:#6d7c8d;--line:#dce6ef;--green:#19a974;--red:#df4c55;--amber:#d99a23}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,Segoe UI,Arial,sans-serif}.top{background:linear-gradient(120deg,var(--navy),#0b5689);color:#fff;padding:22px 30px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 8px 28px #071b3330}.brand{display:flex;gap:14px;align-items:center}.logo{width:46px;height:46px;border:2px solid #51c7ed;border-radius:14px;display:grid;place-items:center;font-size:23px;font-weight:800}.brand h1{margin:0;font-size:22px}.brand small{color:#bde8fa}.live{display:flex;gap:8px;align-items:center}.dot{width:9px;height:9px;background:#31dc9a;border-radius:50%;box-shadow:0 0 0 5px #31dc9a22}.wrap{max-width:1500px;margin:0 auto;padding:24px}.toolbar{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-bottom:18px}.toolbar h2{margin:0;font-size:20px}.actions{display:flex;gap:8px;flex-wrap:wrap}button{border:0;border-radius:9px;padding:10px 14px;font-weight:700;cursor:pointer;background:#e7eef5;color:var(--text)}button.primary{background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff}button.danger{color:var(--red)}button:disabled{opacity:.5;cursor:not-allowed}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}.metric,.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #0b254012}.metric{padding:17px}.metric b{font-size:24px;display:block;margin-top:6px}.metric span{color:var(--muted);font-size:12px}.muted{color:var(--muted)}.badge{font-size:11px;font-weight:800;text-transform:uppercase;border-radius:999px;padding:5px 8px;background:#eef2f6;white-space:nowrap}.badge.running{background:#dcf8ec;color:#087d56}.badge.error{background:#ffe4e5;color:#b72a34}.table-wrap{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #0b254012;overflow:auto}.carrier-table{width:100%;min-width:1050px;border-collapse:collapse}.carrier-table th{padding:12px 14px;background:#edf4fa;color:#526477;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em}.carrier-table td{padding:14px;border-top:1px solid var(--line);vertical-align:middle}.carrier-table tbody:first-child tr:first-child td{border-top:0}.carrier-table tr.main-row:hover td{background:#f8fbfd}.carrier-name{font-size:15px;font-weight:800}.carrier-sub{margin-top:4px;font-size:12px;color:var(--muted)}.actions-col{width:190px;position:sticky;right:0;background:#fff;box-shadow:-8px 0 14px -14px #071b33;z-index:1}.carrier-table th.actions-col{background:#edf4fa}.action-stack{display:grid;grid-template-columns:1fr 1fr;gap:6px}.action-stack button{padding:8px 9px;font-size:12px}.action-stack .wide{grid-column:1/-1}.program-row{display:none}.program-row.open{display:table-row}.program-row>td{padding:0;background:#f5f9fc}.program-panel{padding:18px 22px}.program-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.program-list{display:grid;gap:8px}.program-line{display:grid;grid-template-columns:1.1fr 80px 120px 2fr 2fr auto;gap:12px;align-items:center;padding:11px 12px;background:#fff;border:1px solid var(--line);border-radius:10px}.program-line button{padding:8px 10px}.program-now{font-weight:750}.progress{height:5px;background:#e6edf3;border-radius:9px;margin-top:6px;overflow:hidden}.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}.empty{padding:50px;text-align:center;color:var(--muted)}.modal-back{position:fixed;inset:0;background:#071b3399;display:grid;place-items:center;padding:20px;z-index:5}.modal{background:#fff;border-radius:16px;width:min(920px,100%);max-height:92vh;overflow:auto;padding:22px;box-shadow:0 24px 70px #0005}.modal h2{margin:0 0 18px}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}label{display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:12px}label.wide{grid-column:1/-1}input,select{width:100%;border:1px solid #cbd8e4;border-radius:8px;padding:10px;background:#fff;color:var(--text)}.service-edit{display:grid;grid-template-columns:1.2fr 1.5fr .6fr auto;gap:8px;margin:8px 0;align-items:end;padding:10px;background:#f5f8fb;border-radius:10px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.guide-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.guide-list{margin-top:14px;display:flex;flex-direction:column;gap:9px}.guide-item{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px}.guide-item.current{border-color:#23aee1;background:#edfaff}.toast{position:fixed;right:20px;bottom:20px;background:var(--navy);color:#fff;padding:13px 17px;border-radius:10px;z-index:9;box-shadow:0 10px 30px #0004}.error-text{color:var(--red)}@media(max-width:760px){.wrap{padding:14px}.summary{grid-template-columns:1fr 1fr}.form-grid{grid-template-columns:1fr}.service-edit{grid-template-columns:1fr}.top{padding:16px}.program-line{grid-template-columns:1fr 70px}.program-line .program-detail{grid-column:1/-1}.actions-col{position:static}.carrier-table{min-width:900px}}
-</style></head><body><header class="top"><div class="brand"><div class="logo">E</div><div><h1>EPG Stream</h1><small>Programação ISDB-TB em multicast</small></div></div><div class="live"><i class="dot"></i><span id="clock">Conectando</span></div></header><main class="wrap"><div class="toolbar"><div><h2>Portadoras e programação</h2><div class="muted">Visualização compacta; expanda uma portadora para consultar a programação.</div></div><div class="actions"><button id="usersButton" style="display:none" onclick="openUsers()">Usuários</button><button onclick="openSources()">Fontes XMLTV</button><button id="timelineButton" disabled onclick="openTimeline()">Grade de programação</button><button class="primary" onclick="openCarrier()">+ Nova portadora</button></div></div><section class="summary"><div class="metric"><span>PORTADORAS</span><b id="mCarriers">0</b></div><div class="metric"><span>EMISSORAS ATIVAS</span><b id="mActive">0</b></div><div class="metric"><span>CANAIS / SERVIÇOS</span><b id="mServices">0</b></div><div class="metric"><span>REINÍCIOS</span><b id="mRestarts">0</b></div></section><section id="carrierTable"></section></main><div id="overlay"></div><div id="toast"></div>
+</style></head><body><header class="top"><div class="brand"><div class="logo">E</div><div><h1>EPG Stream</h1><small>Programação ISDB-TB em multicast</small></div></div><div class="live"><i class="dot"></i><span id="clock">Conectando</span></div></header><main class="wrap"><div class="toolbar"><div><h2>Portadoras e programação</h2><div class="muted">Visualização compacta; expanda uma portadora para consultar a programação.</div></div><div class="actions"><button id="usersButton" style="display:none" onclick="openUsers()">Usuários</button><button onclick="openPublications()">Publicações XMLTV</button><button onclick="openSources()">Fontes XMLTV</button><button id="timelineButton" disabled onclick="openTimeline()">Grade de programação</button><button class="primary" onclick="openCarrier()">+ Nova portadora</button></div></div><section class="summary"><div class="metric"><span>PORTADORAS</span><b id="mCarriers">0</b></div><div class="metric"><span>EMISSORAS ATIVAS</span><b id="mActive">0</b></div><div class="metric"><span>CANAIS / SERVIÇOS</span><b id="mServices">0</b></div><div class="metric"><span>REINÍCIOS</span><b id="mRestarts">0</b></div></section><section id="carrierTable"></section></main><div id="overlay"></div><div id="toast"></div>
 <script>
 document.head.insertAdjacentHTML('beforeend','<style>.service-edit{grid-template-columns:1.05fr 1.05fr 1.35fr .48fr 1.15fr auto}.logo-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.logo-tools button{padding:8px}.logo-preview{width:64px;height:36px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px}.logo-status{font-size:11px;color:var(--muted)}@media(max-width:1000px){.service-edit{grid-template-columns:1fr 1fr}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.modal.timeline-modal{width:min(1420px,100%);padding:0;overflow:hidden}.timeline-head{padding:22px 24px 16px;border-bottom:1px solid var(--line)}.timeline-tools{display:flex;gap:9px;align-items:end;flex-wrap:wrap}.timeline-tools label{min-width:240px}.timeline-scroll{overflow:auto;max-height:70vh;background:#f8fbfd}.timeline-board{min-width:1120px}.timeline-axis,.timeline-row{display:grid;grid-template-columns:180px 1fr}.timeline-axis{position:sticky;top:0;z-index:4;background:#eef5fa;border-bottom:1px solid #cbd8e4}.timeline-corner,.timeline-channel{position:sticky;left:0;z-index:3;background:#fff;border-right:1px solid #cbd8e4}.timeline-corner{background:#eef5fa;padding:13px 14px;font-weight:800}.timeline-hours{position:relative;height:45px;background:repeating-linear-gradient(to right,transparent 0,transparent calc(16.666% - 1px),#cbd8e4 calc(16.666% - 1px),#cbd8e4 16.666%)}.timeline-hour{position:absolute;top:13px;transform:translateX(8px);font-size:12px;font-weight:750;color:#526477}.timeline-row{min-height:82px;border-bottom:1px solid var(--line)}.timeline-channel{display:flex;gap:9px;align-items:center;padding:10px 12px}.timeline-channel img{width:54px;height:36px;object-fit:contain}.timeline-channel strong{display:block}.timeline-track{position:relative;min-height:82px;background:repeating-linear-gradient(to right,#fff 0,#fff calc(16.666% - 1px),#e1e8ee calc(16.666% - 1px),#e1e8ee 16.666%)}.timeline-program{position:absolute;top:7px;height:68px;overflow:hidden;padding:8px 9px;border:1px solid #a9cde2;border-radius:8px;background:linear-gradient(145deg,#e9f7ff,#d8eefb);color:#0a426a;text-align:left;font-weight:600}.timeline-program.current{background:linear-gradient(145deg,#087ec1,#14a9dd);border-color:#087ec1;color:#fff}.timeline-program b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.timeline-program small{display:block;margin-top:5px;opacity:.8}.timeline-empty{padding:29px 14px;color:var(--muted)}.timeline-now{position:absolute;top:0;bottom:0;width:2px;background:#df4c55;z-index:2;pointer-events:none}.timeline-now:before{content:"Agora";position:absolute;top:2px;left:4px;background:#df4c55;color:#fff;padding:2px 5px;border-radius:4px;font-size:9px;font-weight:800}.timeline-now.track:before{display:none}@media(max-width:760px){.modal-back{padding:8px}.modal.timeline-modal{max-height:96vh}.timeline-head{padding:16px}.timeline-tools label{min-width:100%}}</style>');
-let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],expandedCarriers=new Set(),guideCache={},timelineCarrierId='',timelineStart=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+document.head.insertAdjacentHTML('beforeend','<style>.modal.publication-modal{width:min(1180px,100%)}.publication-card{border:1px solid var(--line);border-radius:13px;padding:16px;margin-top:13px;background:#f9fbfd}.publication-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.publication-url{display:flex;gap:7px;margin:12px 0}.publication-url input{font-family:Consolas,monospace;font-size:12px}.version-table{width:100%;border-collapse:collapse;background:#fff}.version-table th,.version-table td{padding:9px;border-top:1px solid var(--line);text-align:left;font-size:12px}.version-table th{color:var(--muted);font-size:10px;text-transform:uppercase}.upload-label{display:inline-flex;flex-direction:row;align-items:center;background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff;border-radius:9px;padding:10px 14px;cursor:pointer}.upload-label input{display:none}@media(max-width:760px){.publication-title,.publication-url{flex-direction:column}.version-table{min-width:850px}}</style>');
+let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},timelineCarrierId='',timelineStart=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'--:--';
 function toast(message,error=false){el('toast').innerHTML=`<div class="toast ${error?'error-text':''}">${esc(message)}</div>`;setTimeout(()=>el('toast').innerHTML='',3500)}
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt});const j=await r.json().catch(()=>({error:'Resposta inválida'}));if(!r.ok||j.error)throw Error(j.error||`HTTP ${r.status}`);return j}
@@ -1253,6 +1589,17 @@ async function openUsers(){try{users=(await api('/api/users')).users;modal(`<div
 function editUser(id=''){const u=users.find(item=>item.id===id)||{role:'operator',enabled:true};modal(`<h2>${id?'Editar usuário':'Novo usuário'}</h2><div class="form-grid"><input id="userId" type="hidden" value="${esc(u.id||'')}"><label>Usuário<input id="userName" maxlength="32" autocomplete="off" value="${esc(u.username||'')}"></label><label>Nome de exibição<input id="userDisplay" maxlength="80" value="${esc(u.display_name||'')}"></label><label>Perfil<select id="userRole"><option value="operator" ${u.role==='operator'?'selected':''}>Operador</option><option value="admin" ${u.role==='admin'?'selected':''}>Administrador</option></select></label><label>Status<select id="userEnabled"><option value="1" ${u.enabled?'selected':''}>Ativo</option><option value="0" ${!u.enabled?'selected':''}>Desativado</option></select></label><label class="wide">${id?'Nova senha (deixe vazio para manter)':'Senha'}<input id="userPassword" type="password" minlength="10" autocomplete="new-password" placeholder="Mínimo de 10 caracteres"></label></div><p class="muted">A senha nunca é exibida ou armazenada em texto legível.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveUser()">Salvar usuário</button></div>`)}
 async function saveUser(){try{const id=el('userId').value,password=el('userPassword').value;await api('/api/users',{method:'POST',body:JSON.stringify({id,username:el('userName').value,display_name:el('userDisplay').value,role:el('userRole').value,enabled:el('userEnabled').value==='1',password})});if(id===session.user?.id&&(password||el('userName').value!==session.user.username||el('userEnabled').value!=='1')){alert('Seu acesso foi alterado. O navegador solicitará as novas credenciais.');location.reload();return}closeModal();toast('Usuário salvo');refresh()}catch(e){toast(e.message,true)}}
 async function deleteUser(id){if(!confirm('Excluir este usuário?'))return;try{await api('/api/users/delete',{method:'POST',body:JSON.stringify({id})});toast('Usuário excluído');openUsers()}catch(e){toast(e.message,true)}}
+const publicationDate=t=>t?new Date(t*1000).toLocaleString('pt-BR'):'—';
+const publicationStatus={selected:'Em entrega',future:'Futura',expired:'Expirada',available:'Disponível'};
+async function openPublications(){try{publications=(await api('/api/publications')).publications;modal(`<div class="guide-head"><div><h2>Publicações XMLTV</h2><div class="muted">Converta arquivos da programadora e mantenha uma URL permanente para todas as vigências.</div></div><div class="actions"><button class="primary" onclick="editPublication()">+ Nova publicação</button><button onclick="closeModal()">Fechar</button></div></div>${publications.length?publications.map(publicationCard).join(''):'<div class="empty">Nenhuma publicação criada.</div>'}`,'publication-modal')}catch(e){toast(e.message,true)}}
+function publicationCard(p){const url=p.public_url||location.origin+p.public_path;return `<div class="publication-card"><div class="publication-title"><div><h3 style="margin:0">${esc(p.name)}</h3><div class="muted">${p.versions.length} arquivo(s) · URL permanente</div></div><div class="actions"><button onclick="editPublication('${esc(p.id)}')">Renomear</button><label class="upload-label">Enviar XMLTV<input type="file" accept=".xml,.xmltv,.gz,application/xml,text/xml,application/gzip" onchange="uploadPublication('${esc(p.id)}',this)"></label><button class="danger" onclick="deletePublication('${esc(p.id)}')">Excluir</button></div></div><div class="publication-url"><input id="publicationUrl-${esc(p.id)}" readonly value="${esc(url)}"><button onclick="copyPublicationUrl('${esc(p.id)}')">Copiar URL</button></div><div class="table-wrap"><table class="version-table"><thead><tr><th>Situação</th><th>Arquivo</th><th>Válido de</th><th>Válido até</th><th>Conteúdo</th><th>Normalização</th><th></th></tr></thead><tbody>${p.versions.length?p.versions.map(v=>publicationVersionRow(p,v)).join(''):'<tr><td colspan="7" class="muted">Envie o primeiro XMLTV para ativar esta URL.</td></tr>'}</tbody></table></div></div>`}
+function publicationVersionRow(p,v){const corrections=(v.timezone_added||0)+(v.channel_refs_rewritten||0)+(v.channels_synthesized||0)+(v.duplicate_channels_removed||0)+(v.invalid_programmes_removed||0);return `<tr><td><span class="badge ${v.status==='selected'?'running':v.status==='expired'?'error':''}">${esc(publicationStatus[v.status]||v.status)}</span></td><td><b>${esc(v.filename)}</b><div class="muted">${(v.bytes/1024/1024).toFixed(1)} MiB</div></td><td>${publicationDate(v.valid_from)}</td><td>${publicationDate(v.valid_until)}</td><td>${v.channels} canais<br>${v.programmes} programas</td><td>${corrections.toLocaleString('pt-BR')} ajustes<div class="muted">${v.channel_refs_rewritten||0} IDs · ${v.invalid_programmes_removed||0} descartados</div></td><td><button class="danger" onclick="deletePublicationVersion('${esc(p.id)}','${esc(v.id)}')">Excluir</button></td></tr>`}
+function editPublication(id=''){const p=publications.find(item=>item.id===id)||{};modal(`<h2>${id?'Renomear':'Nova'} publicação XMLTV</h2><input id="publicationId" type="hidden" value="${esc(p.id||'')}"><label>Nome da publicação<input id="publicationName" maxlength="100" value="${esc(p.name||'')}" placeholder="Ex.: Grade semanal da programadora"></label><div class="muted" style="margin-top:10px">A URL é criada uma única vez e não muda nos próximos uploads.</div><div class="modal-actions"><button onclick="openPublications()">Cancelar</button><button class="primary" onclick="savePublication()">Salvar</button></div>`)}
+async function savePublication(){try{await api('/api/publications',{method:'POST',body:JSON.stringify({id:el('publicationId').value,name:el('publicationName').value})});toast('Publicação salva');openPublications()}catch(e){toast(e.message,true)}}
+async function uploadPublication(id,input){const file=input.files?.[0];if(!file)return;if(file.size>96*1024*1024){toast('O XMLTV deve possuir no máximo 96 MiB',true);return}toast('Enviando e normalizando o XMLTV…');try{const response=await fetch(`/api/publications/upload?id=${encodeURIComponent(id)}&filename=${encodeURIComponent(file.name)}`,{method:'POST',headers:{'Content-Type':file.type||'application/xml'},body:file});const result=await response.json().catch(()=>({error:'Resposta inválida'}));if(!response.ok||result.error)throw Error(result.error||`HTTP ${response.status}`);toast(`${result.version.programmes.toLocaleString('pt-BR')} programas publicados`);openPublications()}catch(e){toast(e.message,true)}}
+async function copyPublicationUrl(id){const input=el(`publicationUrl-${id}`);try{await navigator.clipboard.writeText(input.value);toast('URL permanente copiada')}catch(e){input.select();document.execCommand('copy');toast('URL permanente copiada')}}
+async function deletePublicationVersion(publicationId,versionId){if(!confirm('Excluir esta versão do XMLTV? A URL poderá selecionar outro arquivo.'))return;try{await api('/api/publications/version/delete',{method:'POST',body:JSON.stringify({publication_id:publicationId,version_id:versionId})});toast('Versão excluída');openPublications()}catch(e){toast(e.message,true)}}
+async function deletePublication(id){if(!confirm('Excluir a publicação, todos os arquivos e sua URL permanente?'))return;try{await api('/api/publications/delete',{method:'POST',body:JSON.stringify({id})});toast('Publicação excluída');openPublications()}catch(e){toast(e.message,true)}}
 function openSources(){modal(`<div class="guide-head"><h2>Fontes XMLTV</h2><div class="actions"><button onclick="editSource()">+ Nova fonte</button><button onclick="closeModal()">Fechar</button></div></div><div class="guide-list">${sources.map(s=>`<div class="guide-item"><div><b>${s.is_default?'PADRÃO':'XMLTV'}</b></div><div><strong>${esc(s.name)}</strong><div class="muted">${esc(s.url)}</div><div class="actions" style="margin-top:8px"><button onclick="editSource('${esc(s.id)}')">Editar</button><button onclick="testSource('${esc(s.id)}')">Testar</button>${sources.length>1?`<button class="danger" onclick="deleteSource('${esc(s.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div>`)}
 function editSource(id=''){const s=sources.find(x=>x.id===id)||{};modal(`<h2>${id?'Editar':'Nova'} fonte XMLTV</h2><div class="form-grid"><input id="srcId" type="hidden" value="${esc(s.id||'')}"><label class="wide">Nome<input id="srcName" value="${esc(s.name||'')}"></label><label class="wide">URL HTTP/HTTPS<input id="srcUrl" value="${esc(s.url||'')}"></label><label><span>Fonte padrão</span><select id="srcDefault"><option value="0">Não</option><option value="1" ${s.is_default?'selected':''}>Sim</option></select></label></div><div class="modal-actions"><button onclick="openSources()">Voltar</button><button onclick="testSourceForm()">Testar</button><button class="primary" onclick="saveSource()">Salvar</button></div>`)}
 async function saveSource(){try{await api('/api/sources',{method:'POST',body:JSON.stringify({id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,is_default:el('srcDefault').value==='1'})});await refresh();openSources();toast('Fonte salva')}catch(e){toast(e.message,true)}}
@@ -1267,12 +1614,13 @@ def main() -> None:
     global APP
     bootstrap_user = os.environ.get("EPG_ADMIN_USER", "").strip()
     bootstrap_password = os.environ.get("EPG_ADMIN_PASSWORD", "")
+    public_base_url = os.environ.get("EPG_PUBLIC_BASE_URL", "")
     data_dir = Path(os.environ.get("EPG_DATA_DIR", "/data"))
     binary = os.environ.get("EPG_EMITTER_BINARY", "/app/TVStreamEpgOnly")
     if not Path(binary).is_file():
         raise SystemExit(f"Emissor EPG não encontrado: {binary}")
     try:
-        APP = Application(data_dir, binary, bootstrap_user, bootstrap_password)
+        APP = Application(data_dir, binary, bootstrap_user, bootstrap_password, public_base_url)
     except ApiError as error:
         raise SystemExit(str(error)) from error
     host = os.environ.get("EPG_HTTP_HOST", "0.0.0.0")
