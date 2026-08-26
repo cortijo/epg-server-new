@@ -86,7 +86,7 @@ HTTP 9100 escuta diretamente nos endereços do servidor. Não use `ports:` ou
 
 | Item | Valor |
 |---|---|
-| Imagem | `epgserver:v1.6.0-20260825` |
+| Imagem | `epgserver:v1.7.0-20260826` |
 | Container | `epg-stream` |
 | Rede Docker | `host` |
 | HTTP | `9100`, diretamente no host |
@@ -96,6 +96,9 @@ HTTP 9100 escuta diretamente nos endereços do servidor. Não use `ports:` ou
 | URL pública XMLTV | `http://181.233.106.46:9100/xmltv/<token>.xml` |
 | Container de rollback | `epg-stream-pre-v1.6.0-20260825-214509` (imagem v1.5.0) |
 | Backup de rollback | `/srv/epg-stream-backup-pre-v1.6.0-20260825-214509` |
+
+Rollback mais recente: container `epg-stream-pre-v1.7.0-20260826-085500` e
+dados `/srv/epg-stream-backup-pre-v1.7.0-20260826-085500`.
 
 Essa tabela registra a implantação atual, mas deve sempre ser confirmada com
 `docker inspect` antes de uma nova alteração.

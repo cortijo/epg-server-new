@@ -72,3 +72,13 @@ e o logo SPORTV. A captura conteve 4.739 pacotes TS:
 Os dois testes unitários novos passaram. A suíte geral manteve duas falhas
 preexistentes do ambiente Windows: fixture XMLTV vencida pela data corrente e
 teste de firewall que requer Bash.
+
+Após o deploy, a captura da saída real `239.192.1.192:5022` também passou: BIT
+anunciando `0xC8`, ONID 61, versão 1, zero CRC, zero descontinuidade e nenhum
+erro do auditor. O serviço ficou na imagem `epgserver:v1.7.0-20260826`, com 27
+de 27 portadoras em execução, zero erro e zero reinício.
+
+Rollback preservado:
+
+- container `epg-stream-pre-v1.7.0-20260826-085500`;
+- dados `/srv/epg-stream-backup-pre-v1.7.0-20260826-085500`.

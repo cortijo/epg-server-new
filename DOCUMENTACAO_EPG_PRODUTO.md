@@ -450,7 +450,7 @@ Restrinja TCP/9100 à administração. Multicast é tráfego de saída.
 ### 10.3 Estado implantado em 25/08/2026
 
 ```text
-imagem:    epgserver:v1.6.0-20260825
+imagem:    epgserver:v1.7.0-20260826
 container: epg-stream
 rede:      host
 restart:   unless-stopped
@@ -478,6 +478,11 @@ Rollback preservado nesta implantação:
 
 - container: `epg-stream-pre-v1.6.0-20260825-214509`, com a imagem v1.5.0;
 - dados: `/srv/epg-stream-backup-pre-v1.6.0-20260825-214509`.
+
+Rollback imediato da v1.7.0:
+
+- container: `epg-stream-pre-v1.7.0-20260826-085500`, com a imagem v1.6.0;
+- dados: `/srv/epg-stream-backup-pre-v1.7.0-20260826-085500`.
 
 ### 10.4 Comportamento da tabela do painel
 
