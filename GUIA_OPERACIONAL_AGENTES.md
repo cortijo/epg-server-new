@@ -30,6 +30,12 @@ publicação, as versões anteriores e a seleção por vigência. Nunca trate o 
 original do upload como caminho de arquivo e valide o XML normalizado tanto no
 painel quanto no emissor C++.
 
+O firewall pode ser administrado separadamente por
+`scripts/firewall-manager.sh`. Nunca incorpore essa execução ao instalador do
+produto. Antes de aplicar, use `check` e `render`, confirme que a sessão SSH
+está coberta, preserve acesso por console e consulte a spec
+`specs/2026-08-25-gerenciador-firewall-declarativo.md`.
+
 ## 2. Diagnóstico antes da alteração
 
 1. Leia a documentação e a spec atual.

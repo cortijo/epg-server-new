@@ -40,6 +40,13 @@ credenciais iniciais no ambiente. Ao detectar uma instalação anterior, ele
 constrói primeiro, faz backup, preserva o container antigo e oferece rollback
 automático se a nova versão não ficar saudável. O firewall não é alterado.
 
+Para servidores que precisam de uma política declarativa separada, use
+`scripts/firewall-manager.sh`. Redes e portas ficam em
+`/etc/epg-firewall.conf` e só são carregadas após `check`, `render` e `apply`.
+O gerenciador mantém uma tabela nftables exclusiva e não limpa regras Docker.
+Consulte a seção 10.8 de `DOCUMENTACAO_EPG_PRODUTO.md` antes da primeira
+aplicação.
+
 Para ver as opções sem executar a instalação:
 
 ```bash

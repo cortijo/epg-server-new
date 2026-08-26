@@ -518,6 +518,66 @@ O cabeçalho da janela de Fontes XMLTV contém **Fechar**. O botão chama apenas
 - formulários fecham somente por Salvar, Cancelar ou botão Fechar; clique no
   fundo não descarta edição.
 
+### 10.8 Gerenciador declarativo de firewall
+
+O utilitário `scripts/firewall-manager.sh` é separado do instalador do produto.
+Ele administra somente `table inet epg_managed`, no tráfego TCP/UDP destinado
+ao host. Não limpa o ruleset global, não toca FORWARD/NAT e não altera chains
+do Docker. Multicast de saída e emissores em execução permanecem fora do seu
+escopo.
+
+Instalação inicial:
+
+```bash
+chmod +x scripts/firewall-manager.sh
+sudo ./scripts/firewall-manager.sh install
+```
+
+Quando executado por SSH, `init` cadastra automaticamente o IP remoto como
+`/32` ou `/128` e a porta local daquela sessão. A instalação cria a unit, mas
+não a habilita nem carrega regras antes de uma aplicação validada.
+
+Cadastro e aplicação:
+
+```bash
+sudo epg-firewall network add 45.224.164.0/22
+sudo epg-firewall network add 2804:44f0::/32
+sudo epg-firewall port add tcp 22
+sudo epg-firewall port add tcp 9100
+
+sudo epg-firewall list
+sudo epg-firewall check
+sudo epg-firewall render
+sudo epg-firewall apply
+```
+
+Portas aceitam valor único ou intervalo, como `5000-5010`. Redes são
+canonicalizadas e persistidas em `/etc/epg-firewall.conf`. Alterar o arquivo ou
+usar `add/remove` não muda o firewall até `apply`. Cada aplicação faz
+`nft -c`, troca a tabela em uma única transação e atualiza
+`/etc/epg-firewall.nft`. A primeira aplicação bem-sucedida habilita a unit para
+reaplicar a configuração no boot.
+
+Proteções operacionais:
+
+- a configuração precisa ter pelo menos uma rede e uma porta;
+- em SSH, o IP remoto e a porta do servidor precisam estar autorizados;
+- `--force` é recusado dentro de SSH e serve apenas como confirmação no console;
+- `--dry-run --force apply` renderiza sem exigir root ou nftables;
+- loopback, conexões estabelecidas/relacionadas, ICMP e ICMPv6 são preservados;
+- regras anteriores de UFW/firewalld continuam existindo e ainda podem bloquear
+  algo aceito por esta tabela; revise conflitos antes da adoção.
+
+Rollback pelo console do provedor:
+
+```bash
+sudo epg-firewall disable
+sudo systemctl disable epg-firewall.service
+```
+
+`disable` remove somente `table inet epg_managed`. Sempre mantenha um console
+fora de banda disponível na primeira aplicação.
+
 ## 11. Validação do TS
 
 Use multicast/porta de laboratório:
