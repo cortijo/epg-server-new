@@ -6,7 +6,7 @@
 - Solicitante: `Julio Cortijo`
 - Criada em: `2026-08-25`
 - Última atualização: `2026-08-25`
-- Issue/commit relacionado: `a preencher`
+- Issue/commit relacionado: `9f36515`
 
 ## 1. Resumo
 
@@ -180,7 +180,7 @@ passos pelo console do provedor.
 - Resultado da produção: `não aplicado por segurança`
 - Imagem implantada: `não se aplica`
 - Rollback preservado: `remoção da tabela dedicada`
-- Commit: `a registrar após a criação do commit validado`
+- Commit: `9f36515`
 - Tag: `não se aplica`
-- Pull request/URL: `a preencher`
+- Pull request/URL: `https://github.com/cortijo/epgserver/commit/9f36515`
 - Pendências: `instalação e aplicação dependem de revisão operacional explícita`
