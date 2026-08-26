@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cctype>
 #include <condition_variable>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <iomanip>
@@ -29,7 +30,7 @@ constexpr std::uint64_t kEmissionIntervalNs = 20ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kCarouselPauseNs = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kClockIntervalNs = 5ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kPresentFollowingCycleNs = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::int64_t kBrazilUtcOffsetSeconds = -3 * 60 * 60;
+constexpr std::int32_t kBrazilUtcOffsetMinutes = -3 * 60;
 constexpr std::size_t kMaximumXmlBytes = 96ULL * 1024ULL * 1024ULL;
 
 std::mutex gEpgAuditMutex;
@@ -172,14 +173,22 @@ std::uint8_t bcd(int value) {
     return static_cast<std::uint8_t>(((value / 10) << 4) | (value % 10));
 }
 
+std::int32_t effectiveCivilShiftSeconds(EpgProfile profile,
+                                        std::int32_t utcOffsetMinutes,
+                                        std::int32_t correctionSeconds) {
+    if (profile != EpgProfile::IsdbTb) return 0;
+    return utcOffsetMinutes * 60 + correctionSeconds;
+}
+
 void appendDvbTime(std::vector<std::uint8_t>& bytes, std::time_t time,
-                   EpgProfile profile = EpgProfile::Generic) {
+                   EpgProfile profile = EpgProfile::Generic,
+                   std::int32_t civilShiftSeconds = 0) {
     // The legacy profile keeps DVB UTC semantics byte-for-byte.  The Brazilian
     // ISDB-TB profile encodes the civil reference used by ABNT/SBTVD (UTC-3).
     // XMLTV timestamps have already been normalized to an epoch instant by
     // parseXmltvTime(), therefore the offset is applied exactly once here.
     const std::time_t encodedTime = profile == EpgProfile::IsdbTb
-        ? static_cast<std::time_t>(static_cast<std::int64_t>(time) + kBrazilUtcOffsetSeconds)
+        ? static_cast<std::time_t>(static_cast<std::int64_t>(time) + civilShiftSeconds)
         : time;
     const std::int64_t days = static_cast<std::int64_t>(encodedTime) / 86400;
     const std::uint16_t mjd = static_cast<std::uint16_t>(40587 + days);
@@ -278,12 +287,13 @@ void appendExtendedEventDescriptors(std::vector<std::uint8_t>& descriptors,
 }
 
 std::vector<std::uint8_t> eventBytes(const Programme& event, EpgProfile profile,
+                                     std::int32_t civilShiftSeconds,
                                      std::uint8_t runningStatus = 4) {
     std::vector<std::uint8_t> bytes;
     const std::uint16_t id = eventId(event);
     bytes.push_back(static_cast<std::uint8_t>(id >> 8));
     bytes.push_back(static_cast<std::uint8_t>(id));
-    appendDvbTime(bytes, event.start, profile);
+    appendDvbTime(bytes, event.start, profile, civilShiftSeconds);
     const int duration = static_cast<int>(std::max<std::time_t>(0, event.stop - event.start));
     bytes.push_back(bcd((duration / 3600) % 100));
     bytes.push_back(bcd((duration / 60) % 60));
@@ -338,6 +348,7 @@ std::vector<std::uint8_t> makeEitSection(std::uint8_t tableId,
                                          std::uint16_t transportStreamId,
                                          std::uint16_t originalNetworkId,
                                          std::uint8_t version,
+                                         std::int32_t civilShiftSeconds,
                                          std::uint8_t runningStatus = 4,
                                          std::uint8_t segmentLastSectionOverride = 0xFF) {
     const std::uint8_t versionByte = static_cast<std::uint8_t>(
@@ -357,7 +368,7 @@ std::vector<std::uint8_t> makeEitSection(std::uint8_t tableId,
         static_cast<std::uint8_t>(originalNetworkId),
         segmentLastSection, lastTableId};
     for (const auto& event : events) {
-        const auto encoded = eventBytes(event, profile, runningStatus);
+        const auto encoded = eventBytes(event, profile, civilShiftSeconds, runningStatus);
         if (section.size() + encoded.size() + 4 > 4096) break;
         section.insert(section.end(), encoded.begin(), encoded.end());
     }
@@ -403,26 +414,35 @@ std::vector<std::array<std::uint8_t, 188>> packetize(
 
 std::vector<std::array<std::uint8_t, 188>> buildDvbTimePackets(
         std::time_t now, std::uint8_t& continuity,
-        EpgProfile profile = EpgProfile::Generic) {
+        EpgProfile profile = EpgProfile::Generic,
+        std::int32_t utcOffsetMinutes = kBrazilUtcOffsetMinutes,
+        std::int32_t correctionSeconds = 0) {
+    const std::int32_t civilShiftSeconds = effectiveCivilShiftSeconds(
+        profile, utcOffsetMinutes, correctionSeconds);
     std::vector<std::uint8_t> tdt {0x70, 0x70, 0x05};
-    appendDvbTime(tdt, now, profile);
+    appendDvbTime(tdt, now, profile, civilShiftSeconds);
+
+    const int offsetMagnitude = std::abs(utcOffsetMinutes);
+    const int offsetHours = offsetMagnitude / 60;
+    const int offsetMinutes = offsetMagnitude % 60;
+    const std::uint8_t polarity = utcOffsetMinutes < 0 ? 0x01 : 0x00;
 
     std::vector<std::uint8_t> localTimeDescriptor {
         0x58, 0x0D, 'B', 'R', 'A',
-        0x03,             // region 0, reserved bit, negative UTC offset
-        bcd(3), bcd(0)    // UTC-03:00
+        static_cast<std::uint8_t>(0x02 | polarity),
+        bcd(offsetHours), bcd(offsetMinutes)
     };
     std::tm futureUtc {};
     futureUtc.tm_year = 137; // 2037
     futureUtc.tm_mon = 0;
     futureUtc.tm_mday = 1;
     const std::time_t noDstChange = timegmPortable(&futureUtc);
-    appendDvbTime(localTimeDescriptor, noDstChange, profile);
-    localTimeDescriptor.push_back(bcd(3));
-    localTimeDescriptor.push_back(bcd(0));
+    appendDvbTime(localTimeDescriptor, noDstChange, profile, civilShiftSeconds);
+    localTimeDescriptor.push_back(bcd(offsetHours));
+    localTimeDescriptor.push_back(bcd(offsetMinutes));
 
     std::vector<std::uint8_t> tot {0x73, 0x70, 0x00};
-    appendDvbTime(tot, now, profile);
+    appendDvbTime(tot, now, profile, civilShiftSeconds);
     const std::uint16_t descriptorsLength =
         static_cast<std::uint16_t>(localTimeDescriptor.size());
     tot.push_back(static_cast<std::uint8_t>(0xF0 | ((descriptorsLength >> 8) & 0x0F)));
@@ -560,15 +580,17 @@ struct EpgSectionSet {
     std::string nextTitle;
 };
 
-std::int64_t civilDayNumber(std::time_t value, EpgProfile profile) {
+std::int64_t civilDayNumber(std::time_t value, EpgProfile profile,
+                            std::int32_t civilShiftSeconds) {
     const std::int64_t shifted = static_cast<std::int64_t>(value) +
-        (profile == EpgProfile::IsdbTb ? kBrazilUtcOffsetSeconds : 0);
+        (profile == EpgProfile::IsdbTb ? civilShiftSeconds : 0);
     return shifted >= 0 ? shifted / 86400 : (shifted - 86399) / 86400;
 }
 
-int civilHour(std::time_t value, EpgProfile profile) {
+int civilHour(std::time_t value, EpgProfile profile,
+              std::int32_t civilShiftSeconds) {
     const std::time_t shifted = profile == EpgProfile::IsdbTb
-        ? static_cast<std::time_t>(static_cast<std::int64_t>(value) + kBrazilUtcOffsetSeconds)
+        ? static_cast<std::time_t>(static_cast<std::int64_t>(value) + civilShiftSeconds)
         : value;
     std::tm decoded {};
     gmtime_r(&shifted, &decoded);
@@ -582,6 +604,7 @@ EpgSectionSet buildSections(
         std::uint16_t transportStreamId,
         std::uint16_t originalNetworkId,
         std::uint8_t version,
+        std::int32_t civilShiftSeconds,
         std::time_t now = std::time(nullptr)) {
     EpgSectionSet result;
     std::vector<Programme> present;
@@ -612,7 +635,7 @@ EpgSectionSet buildSections(
         if (!legacyPresentFollowing.empty()) {
             result.presentFollowing.push_back(makeEitSection(
                 0x4E, serviceId, legacyPresentFollowing, 0, 0, 0x4E, profile,
-                transportStreamId, originalNetworkId, version));
+                transportStreamId, originalNetworkId, version, civilShiftSeconds));
         }
     } else if (!present.empty() || !following.empty()) {
         // ABNT/ARIB receivers expect p/f actual TS as section 0 (present) and
@@ -620,10 +643,10 @@ EpgSectionSet buildSections(
         // guide only knows the next event.
         result.presentFollowing.push_back(makeEitSection(
             0x4E, serviceId, present, 0, 1, 0x4E, profile,
-            transportStreamId, originalNetworkId, version, 4, 1));
+            transportStreamId, originalNetworkId, version, civilShiftSeconds, 4, 1));
         result.presentFollowing.push_back(makeEitSection(
             0x4E, serviceId, following, 1, 1, 0x4E, profile,
-            transportStreamId, originalNetworkId, version, 1, 1));
+            transportStreamId, originalNetworkId, version, civilShiftSeconds, 1, 1));
     }
 
     if (profile == EpgProfile::Generic) {
@@ -633,7 +656,7 @@ EpgSectionSet buildSections(
         const std::time_t horizon = now + 7 * 24 * 3600;
         for (const auto& item : all) {
             if (item.stop <= now || item.start >= horizon) continue;
-            const std::size_t size = eventBytes(item, profile).size();
+            const std::size_t size = eventBytes(item, profile, civilShiftSeconds).size();
             if (!group.empty() && estimated + size > 3900) {
                 groups.push_back(std::move(group));
                 group.clear();
@@ -648,7 +671,8 @@ EpgSectionSet buildSections(
         for (std::size_t i = 0; i < groups.size() && i < 256; ++i) {
             result.schedule.push_back(makeEitSection(
                 0x50, serviceId, groups[i], static_cast<std::uint8_t>(i), last,
-                0x50, profile, transportStreamId, originalNetworkId, version));
+                0x50, profile, transportStreamId, originalNetworkId, version,
+                civilShiftSeconds));
         }
         return result;
     }
@@ -657,18 +681,18 @@ EpgSectionSet buildSections(
     // to eight sections, as defined by the EIT schedule segmentation model.
     using SegmentKey = std::pair<std::uint8_t, std::uint8_t>;
     std::map<SegmentKey, std::vector<Programme>> segmentEvents;
-    const std::int64_t today = civilDayNumber(now, profile);
+    const std::int64_t today = civilDayNumber(now, profile, civilShiftSeconds);
     const std::time_t horizon = now + 7 * 24 * 3600;
     for (const auto& item : all) {
         if (item.stop <= now || item.start >= horizon) continue;
-        const std::int64_t eventDay = civilDayNumber(item.start, profile);
+        const std::int64_t eventDay = civilDayNumber(item.start, profile, civilShiftSeconds);
         const std::int64_t dayOffset = std::max<std::int64_t>(0, eventDay - today);
         if (dayOffset >= 7) continue;
         const std::uint8_t tableOffset = static_cast<std::uint8_t>(dayOffset / 4);
         const std::uint8_t tableId = static_cast<std::uint8_t>(0x50 + tableOffset);
         const std::uint8_t dayWithinTable = static_cast<std::uint8_t>(dayOffset % 4);
         const std::uint8_t segment = static_cast<std::uint8_t>(
-            dayWithinTable * 8 + civilHour(item.start, profile) / 3);
+            dayWithinTable * 8 + civilHour(item.start, profile, civilShiftSeconds) / 3);
         segmentEvents[{tableId, segment}].push_back(item);
     }
 
@@ -688,7 +712,7 @@ EpgSectionSet buildSections(
         std::vector<Programme> group;
         std::size_t estimated = 18;
         for (const auto& item : entry.second) {
-            const std::size_t size = eventBytes(item, profile, 1).size();
+            const std::size_t size = eventBytes(item, profile, civilShiftSeconds, 1).size();
             if (!group.empty() && estimated + size > 3900 && groups.size() < 7) {
                 groups.push_back(std::move(group));
                 group.clear();
@@ -717,7 +741,7 @@ EpgSectionSet buildSections(
         result.schedule.push_back(makeEitSection(
             section.tableId, serviceId, section.events, section.sectionNumber,
             tableLastSection[section.tableId], lastTableId, profile,
-            transportStreamId, originalNetworkId, version, 1,
+            transportStreamId, originalNetworkId, version, civilShiftSeconds, 1,
             section.segmentLastSection));
     }
     return result;
@@ -850,6 +874,10 @@ struct EpgInjector::Impl {
           defaultCategory(config.epgDefaultCategory),
           serviceId(static_cast<std::uint16_t>(config.serviceId ? config.serviceId : 1)),
           profile(epgProfile(config.epgMode)),
+          utcOffsetMinutes(config.epgClockUtcOffsetMinutes),
+          correctionSeconds(config.epgClockCorrectionSeconds),
+          civilShiftSeconds(effectiveCivilShiftSeconds(
+              profile, utcOffsetMinutes, correctionSeconds)),
           transportStreamId(static_cast<std::uint16_t>(config.epgTransportStreamId)),
           originalNetworkId(static_cast<std::uint16_t>(config.epgOriginalNetworkId)) {
         audit.configured = config.epgEnabled;
@@ -903,7 +931,7 @@ struct EpgInjector::Impl {
             if (!cachedProgrammes.empty()) {
                 const EpgSectionSet built = buildSections(
                     cachedProgrammes, serviceId, profile, transportStreamId,
-                    originalNetworkId, eitVersion);
+                    originalNetworkId, eitVersion, civilShiftSeconds);
                 auto nextPresentFollowing = packetize(built.presentFollowing);
                 auto nextSchedule = packetize(built.schedule);
                 const std::size_t pfPacketCount = nextPresentFollowing.size();
@@ -949,6 +977,8 @@ struct EpgInjector::Impl {
                               << " perfil=" << (profile == EpgProfile::IsdbTb ? "isdbtb" : "generic")
                               << " tsid=" << transportStreamId
                               << " onid=" << originalNetworkId
+                              << " utc_offset_minutes=" << utcOffsetMinutes
+                              << " clock_correction_seconds=" << correctionSeconds
                               << " versao=" << static_cast<unsigned>(eitVersion)
                               << " fonte=" << safeSourceLabel(sourceUrl) << std::endl;
                 }
@@ -987,7 +1017,9 @@ struct EpgInjector::Impl {
         std::lock_guard<std::mutex> lock(mutex);
 
         if (clockCursor >= clockPackets.size() && now >= nextClockEmission) {
-            clockPackets = buildDvbTimePackets(std::time(nullptr), clockContinuity, profile);
+            clockPackets = buildDvbTimePackets(
+                std::time(nullptr), clockContinuity, profile,
+                utcOffsetMinutes, correctionSeconds);
             clockCursor = 0;
         }
         if (clockCursor < clockPackets.size()) {
@@ -1050,6 +1082,9 @@ struct EpgInjector::Impl {
     std::string defaultCategory;
     std::uint16_t serviceId = 1;
     EpgProfile profile = EpgProfile::Generic;
+    std::int32_t utcOffsetMinutes = kBrazilUtcOffsetMinutes;
+    std::int32_t correctionSeconds = 0;
+    std::int32_t civilShiftSeconds = kBrazilUtcOffsetMinutes * 60;
     std::uint16_t transportStreamId = 1;
     std::uint16_t originalNetworkId = 1;
     std::uint8_t eitVersion = 0;

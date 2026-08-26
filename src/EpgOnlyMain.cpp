@@ -75,6 +75,25 @@ std::uint64_t unsignedEnvironment(const char* name,
     return value;
 }
 
+std::int64_t signedEnvironment(const char* name,
+                               std::int64_t fallback,
+                               std::int64_t minimum,
+                               std::int64_t maximum) {
+    const std::string text = environment(name);
+    if (text.empty()) return fallback;
+    std::size_t consumed = 0;
+    std::int64_t value = 0;
+    try {
+        value = std::stoll(text, &consumed, 10);
+    } catch (const std::exception&) {
+        throw std::runtime_error(std::string(name) + " must be an integer");
+    }
+    if (consumed != text.size() || value < minimum || value > maximum) {
+        throw std::runtime_error(std::string(name) + " is outside the accepted range");
+    }
+    return value;
+}
+
 std::uint64_t monotonicNanoseconds() {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -144,6 +163,8 @@ struct EpgOnlyConfiguration {
     std::uint16_t transportStreamId = 1;
     std::uint16_t originalNetworkId = 1;
     std::uint8_t signalVersion = 0;
+    std::int32_t clockUtcOffsetMinutes = -180;
+    std::int32_t clockCorrectionSeconds = 0;
     std::vector<EpgService> services;
 };
 
@@ -403,6 +424,10 @@ EpgOnlyConfiguration loadConfiguration() {
         unsignedEnvironment("EPG_ONID", 1, 1, 65535));
     config.signalVersion = static_cast<std::uint8_t>(
         unsignedEnvironment("EPG_SIGNAL_VERSION", 0, 0, 31));
+    config.clockUtcOffsetMinutes = static_cast<std::int32_t>(
+        signedEnvironment("EPG_CLOCK_UTC_OFFSET_MINUTES", -180, -720, 840));
+    config.clockCorrectionSeconds = static_cast<std::int32_t>(
+        signedEnvironment("EPG_CLOCK_CORRECTION_SECONDS", 0, -86400, 86400));
     const std::string servicesJson = environment("EPG_SERVICES_JSON");
     if (!servicesJson.empty()) {
         Json::Value root;
@@ -481,6 +506,8 @@ StreamConfig injectorConfiguration(const EpgOnlyConfiguration& carrier,
     config.epgSourceUrl = service.sourceUrl;
     config.epgChannelId = service.channelId;
     config.epgDefaultCategory = service.defaultCategory;
+    config.epgClockUtcOffsetMinutes = carrier.clockUtcOffsetMinutes;
+    config.epgClockCorrectionSeconds = carrier.clockCorrectionSeconds;
     config.serviceId = service.serviceId;
     config.epgTransportStreamId = carrier.transportStreamId;
     config.epgOriginalNetworkId = carrier.originalNetworkId;

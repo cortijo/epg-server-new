@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (
-    ApiError, Application, INDEX_HTML, Store, parse_xmltv, parse_xmltv_datetime,
+    ApiError, Application, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
     select_publication_version, validate_carrier,
 )
@@ -43,6 +43,48 @@ class EpgProductTests(unittest.TestCase):
         })
         self.assertEqual(len(carrier["services"]), 2)
         self.assertEqual(carrier["transport_stream_id"], 72)
+        self.assertEqual(carrier["clock_mode"], "standard")
+        self.assertEqual(carrier["clock_utc_offset_minutes"], -180)
+        self.assertEqual(carrier["clock_correction_minutes"], 0)
+
+    def test_custom_carrier_clock_is_validated_and_forwarded(self):
+        carrier = validate_carrier({
+            "name": "Portadora relógio", "source_id": "source",
+            "destination": "239.192.1.212", "port": 5012,
+            "interface_address": "10.0.0.10", "clock_mode": "custom",
+            "clock_utc_offset_minutes": -240, "clock_correction_minutes": 30,
+            "services": [{"name": "Canal", "epg_channel_id": "canal.br",
+                          "service_id": 101}],
+        })
+        self.assertEqual(carrier["clock_utc_offset_minutes"], -240)
+        self.assertEqual(carrier["clock_correction_minutes"], 30)
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "epg-product.json")
+            store.data["sources"] = [{"id": "source", "name": "Fonte",
+                                      "url": "https://example.test/guide.xml",
+                                      "is_default": True}]
+            supervisor = Supervisor(store, "/bin/false", Path(directory) / "logs")
+            environment = supervisor._environment(carrier, store.data["sources"][0])
+            self.assertEqual(environment["EPG_CLOCK_UTC_OFFSET_MINUTES"], "-240")
+            self.assertEqual(environment["EPG_CLOCK_CORRECTION_SECONDS"], "1800")
+        self.assertIn('id="cClockMode"', INDEX_HTML)
+        self.assertIn('id="cClockOffset"', INDEX_HTML)
+        self.assertIn('id="cClockCorrection"', INDEX_HTML)
+
+    def test_custom_carrier_clock_rejects_invalid_values(self):
+        base = {
+            "name": "Portadora relógio", "source_id": "source",
+            "destination": "239.192.1.213", "port": 5012,
+            "interface_address": "10.0.0.10", "clock_mode": "custom",
+            "services": [{"name": "Canal", "epg_channel_id": "canal.br",
+                          "service_id": 101}],
+        }
+        with self.assertRaises(ApiError):
+            validate_carrier({**base, "clock_utc_offset_minutes": -181})
+        with self.assertRaises(ApiError):
+            validate_carrier({**base, "clock_correction_minutes": 1441})
+        with self.assertRaises(ApiError):
+            validate_carrier({**base, "clock_mode": "congelado"})
 
     def test_channel_category_fallback_is_validated_and_rendered(self):
         carrier = validate_carrier({

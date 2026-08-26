@@ -7,6 +7,7 @@ import ipaddress
 import socket
 import struct
 import time
+from pathlib import Path
 
 
 def bcd(value):
@@ -22,30 +23,41 @@ def dvb_time(raw):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("group")
-parser.add_argument("port", type=int)
+parser.add_argument("group", nargs="?")
+parser.add_argument("port", nargs="?", type=int)
+parser.add_argument("--file", help="captura MPEG-TS bruta em vez de multicast ao vivo")
 parser.add_argument("--interface", default="0.0.0.0")
 parser.add_argument("--seconds", type=int, default=15)
 parser.add_argument("--expected-tsid", type=int)
 parser.add_argument("--expected-onid", type=int)
 parser.add_argument("--expected-title-latin9")
+parser.add_argument("--expected-offset-minutes", type=int)
+parser.add_argument("--expected-correction-minutes", type=int, default=0)
 args = parser.parse_args()
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-sock.bind(("", args.port))
-if ipaddress.ip_address(args.group).is_multicast:
-    membership = socket.inet_aton(args.group) + socket.inet_aton(args.interface)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership)
-sock.settimeout(1)
-
 tables = {}
-deadline = time.time() + args.seconds
-while time.time() < deadline:
-    try:
-        datagram, _ = sock.recvfrom(65535)
-    except socket.timeout:
-        continue
+if args.file:
+    datagrams = [Path(args.file).read_bytes()]
+else:
+    if not args.group or args.port is None:
+        parser.error("informe GROUP PORT ou use --file CAPTURA.ts")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("", args.port))
+    if ipaddress.ip_address(args.group).is_multicast:
+        membership = socket.inet_aton(args.group) + socket.inet_aton(args.interface)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership)
+    sock.settimeout(1)
+    datagrams = []
+    deadline = time.time() + args.seconds
+    while time.time() < deadline:
+        try:
+            datagram, _ = sock.recvfrom(65535)
+            datagrams.append(datagram)
+        except socket.timeout:
+            continue
+
+for datagram in datagrams:
     for offset in range(0, len(datagram) - 187, 188):
         packet = datagram[offset:offset + 188]
         if packet[0] != 0x47 or not (packet[1] & 0x40):
@@ -66,11 +78,13 @@ while time.time() < deadline:
         tables.setdefault(table_id, packet[payload:])
 
 print("Tabelas:", ", ".join(f"0x{item:02X}" for item in sorted(tables)))
+decoded_clock = {}
 for table_id in (0x70, 0x73):
     section = tables.get(table_id)
     if section and len(section) >= 8:
-        print(f"{'TDT' if table_id == 0x70 else 'TOT'} UTC:",
-              dvb_time(section[3:8]).isoformat())
+        decoded_clock[table_id] = dvb_time(section[3:8])
+        print(f"{'TDT' if table_id == 0x70 else 'TOT'} codificado:",
+              decoded_clock[table_id].isoformat())
 
 tot = tables.get(0x73)
 if tot and len(tot) >= 20 and tot[10] == 0x58:
@@ -78,6 +92,17 @@ if tot and len(tot) >= 20 and tot[10] == 0x58:
     minutes = polarity * (bcd(tot[16]) * 60 + bcd(tot[17]))
     print("TOT país:", bytes(tot[12:15]).decode("ascii", "replace"))
     print("TOT deslocamento local:", f"{minutes // 60:+03d}:{abs(minutes) % 60:02d}")
+    if args.expected_offset_minutes is not None and minutes != args.expected_offset_minutes:
+        raise SystemExit(
+            f"Offset TOT incorreto: esperado={args.expected_offset_minutes} recebido={minutes}")
+
+if args.expected_offset_minutes is not None and 0x70 in decoded_clock:
+    expected_shift = args.expected_offset_minutes + args.expected_correction_minutes
+    observed_shift = (decoded_clock[0x70] - dt.datetime.now(dt.timezone.utc)).total_seconds() / 60
+    print("Deslocamento total observado:", f"{observed_shift:+.1f} min")
+    if abs(observed_shift - expected_shift) > 2:
+        raise SystemExit(
+            f"Relógio incorreto: esperado={expected_shift:+d} min recebido={observed_shift:+.1f} min")
 
 eit = tables.get(0x4E)
 if eit and len(eit) >= 21:

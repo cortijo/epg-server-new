@@ -19,7 +19,7 @@ transcodifica e não retransmite vídeo ou áudio.
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.8.0 .
+  -t epgserver:v1.9.0 .
 ```
 
 ## Primeira execução
@@ -83,7 +83,7 @@ IDs pelo código numérico do canal, descarta eventos sem duração e publica to
 as versões em uma única URL. A URL escolhe automaticamente a grade vigente e
 permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
 
-## Estado conhecido da versão 1.8.0
+## Estado conhecido da versão 1.9.0
 
 - EIT, TDT/TOT, SDT, BIT e CDT de logo são emitidos e possuem auditoria;
 - o logo usa descritor SDT `0xCF` e CDT `0xC8` no PID `0x0029`;

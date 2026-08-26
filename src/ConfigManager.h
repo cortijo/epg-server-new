@@ -91,6 +91,10 @@ struct StreamConfig {
     std::string epgChannelId;
     // Optional fallback used only when XMLTV has no recognized category.
     std::string epgDefaultCategory;
+    // ISDB-TB civil clock settings. The defaults preserve the existing
+    // Brazilian UTC-03:00 output. Correction keeps advancing with host time.
+    int32_t epgClockUtcOffsetMinutes = -180;
+    int32_t epgClockCorrectionSeconds = 0;
     std::vector<StreamOutputConfig> additionalOutputs;
 
     Json::Value toJson() const;

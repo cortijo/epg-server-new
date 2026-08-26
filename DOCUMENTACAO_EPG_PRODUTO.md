@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada: **1.8.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada: **1.9.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -41,6 +41,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.6.0 | publicações XMLTV normalizadas, versionadas e com URL permanente |
 | 1.7.0 | BIT `0xC4` anuncia CDT de logo pelo descritor SI `0xD7` |
 | 1.8.0 | categoria XMLTV/fallback por canal no descritor EIT `0x54` |
+| 1.9.0 | fuso e correção de relógio configuráveis por portadora |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -124,6 +125,9 @@ Exemplo sanitizado:
     "pmt_pid": 4096,
     "bitrate": 1000000,
     "ttl": 32,
+    "clock_mode": "standard",
+    "clock_utc_offset_minutes": -180,
+    "clock_correction_minutes": 0,
     "signalling_version": 1,
     "services": [{
       "id": "service-2304",
@@ -246,6 +250,14 @@ primeira categoria XMLTV reconhecida e, na ausência dela, o campo
 `default_category` configurado no canal. O fallback não substitui uma categoria
 válida da programadora e não exige PID adicional além da EIT `0x0012`.
 
+Cada portadora também possui um modo de relógio. `standard` preserva o
+comportamento histórico UTC-03:00 sem correção. `custom` permite escolher o
+fuso entre UTC-12:00 e UTC+14:00, em passos de 15 minutos, e aplicar uma
+correção de -1440 a +1440 minutos. A correção é relativa ao relógio do host e,
+portanto, continua avançando; ela não congela uma data/hora. O mesmo
+referencial civil é aplicado à EIT `0x0012` e a TDT/TOT `0x0014`, enquanto o
+descritor `0x58` da TOT anuncia somente o fuso escolhido.
+
 Cadências atuais do emissor:
 
 | Conteúdo | Intervalo |
@@ -299,6 +311,7 @@ Variáveis internas:
 EPG_STREAM_ID, EPG_STREAM_NAME, EPG_SOURCE_URL, EPG_SERVICES_JSON,
 EPG_TSID, EPG_ONID, EPG_DESTINATION, EPG_PORT, EPG_INTERFACE,
 EPG_PMT_PID, EPG_BITRATE, EPG_TTL, EPG_SIGNAL_VERSION
+EPG_CLOCK_UTC_OFFSET_MINUTES, EPG_CLOCK_CORRECTION_SECONDS
 ```
 
 Não registre essas variáveis: fontes comerciais podem conter credenciais.
@@ -530,6 +543,7 @@ O cabeçalho da janela de Fontes XMLTV contém **Fechar**. O botão chama apenas
 - administração de usuários e troca de senha pelo perfil administrador;
 - CRUD e teste de fontes XMLTV;
 - criação, edição e clonagem de portadoras;
+- relógio padrão ou fuso/correção personalizados por portadora;
 - fonte padrão por portadora e sobreposição de fonte por canal;
 - upload, troca, remoção e miniatura autenticada do logo;
 - Start, Stop, Restart, exclusão e consulta de logs;

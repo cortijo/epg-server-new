@@ -29,7 +29,7 @@ Execute na raiz do repositório:
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.8.0-20260826 .
+  -t epgserver:v1.9.0-20260826 .
 ```
 
 A imagem compila somente o emissor `TVStreamEpgOnly`. O runtime não contém
@@ -183,6 +183,12 @@ final ainda depende de o receptor implementar download de logo ARIB.
 O emissor converte categorias reconhecidas do XMLTV para o descritor de
 conteúdo `0x54` na EIT. No cadastro de cada canal, **Categoria padrão** funciona
 como fallback somente quando o evento não possuir uma categoria reconhecida.
+
+O formulário da portadora também oferece **Relógio PID 0x0014**. O modo
+**Padrão do sistema** mantém UTC-03:00 e correção zero. O modo personalizado
+permite escolher o fuso transmitido e uma correção em minutos; o relógio segue
+avançando e a mesma referência é usada na EIT para evitar divergência entre a
+hora da TV e a programação.
 O transporte continua no PID `0x0012`; nenhuma linha adicional é necessária no
 PID PASSTHRU do Dexing.
 

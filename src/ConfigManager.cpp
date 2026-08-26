@@ -134,6 +134,10 @@ StreamConfig StreamConfig::fromJson(const Json::Value& root) {
         "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml").asString();
     config.epgChannelId = root.get("epg_channel_id", "").asString();
     config.epgDefaultCategory = root.get("epg_default_category", "").asString();
+    config.epgClockUtcOffsetMinutes = std::clamp<int32_t>(
+        root.get("epg_clock_utc_offset_minutes", -180).asInt(), -720, 840);
+    config.epgClockCorrectionSeconds = std::clamp<int32_t>(
+        root.get("epg_clock_correction_seconds", 0).asInt(), -86400, 86400);
     if (root.isMember("outputs") && root["outputs"].isArray() && root["outputs"].size() > 0) {
         const auto primary = StreamOutputConfig::fromJson(root["outputs"][0]);
         config.outputType = primary.outputType;
@@ -198,6 +202,8 @@ Json::Value StreamConfig::toJson() const {
     root["epg_source_url"] = epgSourceUrl;
     root["epg_channel_id"] = epgChannelId;
     root["epg_default_category"] = epgDefaultCategory;
+    root["epg_clock_utc_offset_minutes"] = epgClockUtcOffsetMinutes;
+    root["epg_clock_correction_seconds"] = epgClockCorrectionSeconds;
     Json::Value extraOutputs(Json::arrayValue);
     for (const auto& output : additionalOutputs) {
         extraOutputs.append(output.toJson());
