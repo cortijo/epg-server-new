@@ -48,3 +48,10 @@ A captura final apresentou simultaneamente `0x10` para o evento classificado
 como Filmes no XMLTV e `0x40` para o evento sem categoria que recebeu o
 fallback Esportes. O auditor terminou com `ok=true`, zero CRC, zero
 descontinuidade e nenhum erro estrutural.
+
+A versão foi publicada como imagem `epgserver:v1.8.0-20260826`, tag Git
+`epg-v1.8.0` e commit funcional `0af3125`. Após o deploy, o health informou
+`1.8.0`, o login administrativo respondeu HTTP 200 e as 27 portadoras ficaram
+em execução, sem erros ou reinícios. O rollback preservado é o container
+`epg-stream-pre-v1.8.0-20260826-095523` e os dados em
+`/srv/epg-stream-backup-pre-v1.8.0-20260826-095523`.

@@ -86,7 +86,7 @@ HTTP 9100 escuta diretamente nos endereços do servidor. Não use `ports:` ou
 
 | Item | Valor |
 |---|---|
-| Imagem | `epgserver:v1.7.0-20260826` |
+| Imagem | `epgserver:v1.8.0-20260826` |
 | Container | `epg-stream` |
 | Rede Docker | `host` |
 | HTTP | `9100`, diretamente no host |
@@ -94,11 +94,12 @@ HTTP 9100 escuta diretamente nos endereços do servidor. Não use `ports:` ou
 | Usuário do processo | `10001:10001` |
 | Volume | `/srv/epg-stream:/data` |
 | URL pública XMLTV | `http://181.233.106.46:9100/xmltv/<token>.xml` |
-| Container de rollback | `epg-stream-pre-v1.6.0-20260825-214509` (imagem v1.5.0) |
-| Backup de rollback | `/srv/epg-stream-backup-pre-v1.6.0-20260825-214509` |
+| Container de rollback | `epg-stream-pre-v1.8.0-20260826-095523` (imagem v1.7.0) |
+| Backup de rollback | `/srv/epg-stream-backup-pre-v1.8.0-20260826-095523` |
 
-Rollback mais recente: container `epg-stream-pre-v1.7.0-20260826-085500` e
-dados `/srv/epg-stream-backup-pre-v1.7.0-20260826-085500`.
+O deploy foi validado com 27 portadoras ativas, nenhuma em erro e nenhum
+reinício do container. O acesso administrativo `epgadmin` também foi validado
+após a restauração da senha operacional.
 
 Essa tabela registra a implantação atual, mas deve sempre ser confirmada com
 `docker inspect` antes de uma nova alteração.
