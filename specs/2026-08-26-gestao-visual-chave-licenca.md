@@ -1,7 +1,7 @@
 # Gestão visual da chave de licença
 
 - ID: `2026-08-26-gestao-visual-chave-licenca`
-- Estado: `implantada`
+- Estado: `concluída`
 - Responsável: Codex
 - Solicitante: Julio Cortijo
 - Criada em: 2026-08-26
@@ -98,4 +98,14 @@ por volume Docker, sem fluxo visual para o administrador.
 - Backups: `/srv/epg-stream-backup-pre-v1.11.0-20260827-073708`,
   `epg-license-data-backup-pre-v1.1.0-20260827-073708` e
   `epg-license-client-backup-pre-v1.11.0-20260827-073708`.
-- Pendências: teste visual móvel, commit/push e tag `epg-v1.11.0`.
+- Pendência não bloqueante: repetir a conferência visual em viewport móvel.
+
+## Resultado final
+
+- Commit de implementação: `5082ba6`.
+- Imagens: `epgserver:v1.11.0-20260826` e
+  `epg-license-server:v1.1.0-20260826`.
+- Produção: saudável, 27 emissores, zero reinícios, licença válida em 63/80.
+- Tag de release: `epg-v1.11.0`.
+- Rollback e backups: preservados conforme registro acima.
+- Pendência não bloqueante: repetir a conferência visual em viewport móvel.

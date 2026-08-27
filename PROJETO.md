@@ -47,13 +47,13 @@ o candidato e a produção estejam na mesma versão.
 
 ### 2.1 Git e código local
 
-- último commit publicado antes do trabalho atual: `a7fb71d` em `origin/main`;
-- última tag implantada: `epg-v1.10.0`;
+- commit de implementação da v1.11: `5082ba6`;
+- tag prevista para o estado final documentado: `epg-v1.11.0`;
 - `PRODUCT_VERSION` e produção EPG: `1.11.0`;
 - servidor de licenças e produção: `1.1.0`;
 - as mudanças de gestão visual da chave foram validadas e promovidas em
   27/08/2026 às 07:37;
-- a spec ativa é
+- a spec da entrega é
   `specs/2026-08-26-gestao-visual-chave-licenca.md`.
 
 Nunca descarte o working tree. Antes de qualquer ação execute:
