@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada: **1.10.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada e implantada: **1.11.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -43,6 +43,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.8.0 | categoria XMLTV/fallback por canal no descritor EIT `0x54` |
 | 1.9.0 | fuso e correção de relógio configuráveis por portadora |
 | 1.10.0 | licenciamento online por canais e interface de logo temporariamente oculta |
+| 1.11.0 | gestão visual: Ver/Copiar chave v2 e instalação atômica no painel EPG |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.

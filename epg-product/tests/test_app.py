@@ -46,6 +46,33 @@ class EpgProductTests(unittest.TestCase):
                 with self.assertRaises(LicenseError):
                     manager.require(2, force=True)
 
+    def test_license_key_is_validated_before_atomic_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "license.key"
+            old_key = "EPG-" + "a" * 48
+            new_key = "EPG-" + "b" * 48
+            key_path.write_text(old_key + "\n", encoding="utf-8")
+            manager = LicenseManager("http://license.test:9200", str(key_path), "install-001")
+            response = mock.MagicMock()
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            response.read.return_value = b'{"valid":true,"name":"Teste","max_channels":10,"checked_at":1}'
+            with mock.patch("urllib.request.urlopen", return_value=response):
+                status = manager.install_key(new_key, 2)
+            self.assertTrue(status["valid"])
+            self.assertEqual(key_path.read_text(encoding="utf-8"), new_key + "\n")
+            self.assertNotIn("key", status)
+
+            error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
+                "http://license.test:9200/api/validate", 403, "Forbidden", {},
+                __import__("io").BytesIO(
+                    '{"valid":false,"reason":"Chave não reconhecida"}'.encode("utf-8"))
+            )
+            with mock.patch("urllib.request.urlopen", side_effect=error):
+                with self.assertRaisesRegex(LicenseError, "não reconhecida"):
+                    manager.install_key("EPG-" + "c" * 48, 2)
+            self.assertEqual(key_path.read_text(encoding="utf-8"), new_key + "\n")
+
     def test_xmltv_timezone_and_schedule(self):
         parsed = parse_xmltv_datetime("20260824120000 -0300")
         self.assertEqual(parsed, datetime(2026, 8, 24, 15, 0, tzinfo=timezone.utc))
@@ -195,8 +222,10 @@ class EpgProductTests(unittest.TestCase):
         self.assertEqual(select_publication_version(versions, 450)["id"], "next")
 
     def test_publication_upload_persists_normalized_version_and_stable_token(self):
-        payload = b'''<tv><channel id="0001 CANAL"><display-name>Canal</display-name></channel>
-          <programme channel="0001 CANAL" start="20260825000000" stop="20260826000000"><title>Grade</title></programme></tv>'''
+        start = datetime.now(timezone.utc) + timedelta(hours=1)
+        stop = start + timedelta(days=1)
+        payload = f'''<tv><channel id="0001 CANAL"><display-name>Canal</display-name></channel>
+          <programme channel="0001 CANAL" start="{start.strftime('%Y%m%d%H%M%S')}" stop="{stop.strftime('%Y%m%d%H%M%S')}"><title>Grade</title></programme></tv>'''.encode("utf-8")
         with tempfile.TemporaryDirectory() as directory:
             app = Application.__new__(Application)
             app.data_dir = Path(directory)
@@ -301,6 +330,13 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('id="licenseMetric"', INDEX_HTML)
         self.assertIn('id="mLicense"', INDEX_HTML)
         self.assertIn("state.license?.valid", INDEX_HTML)
+        self.assertIn('id="licenseButton"', INDEX_HTML)
+        self.assertIn("function openLicense()", INDEX_HTML)
+        self.assertIn("async function saveLicenseKey()", INDEX_HTML)
+        self.assertIn("/api/license/key", INDEX_HTML)
+        self.assertIn("el('licenseButton').style.display=admin?'':'none'", INDEX_HTML)
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn('elif path == "/api/license/key":\n                self._require_admin()', source)
 
     def test_publications_ui_has_raw_upload_and_stable_url(self):
         self.assertIn('onclick="openPublications()">Publicações XMLTV', INDEX_HTML)

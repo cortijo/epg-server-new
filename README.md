@@ -4,6 +4,11 @@ Aplicação independente para administrar fontes XMLTV e transmitir EPG
 ISDB-TB em fluxos auxiliares UDP multicast. O produto não recebe, não
 transcodifica e não retransmite vídeo ou áudio.
 
+Para iniciar manutenção, diagnóstico ou desenvolvimento, leia primeiro
+[`PROJETO.md`](PROJETO.md). Ele consolida arquitetura, estado real de produção
+e candidato, regras de trabalho, testes, deploy e rollback para continuidade
+por outro agente ou LLM.
+
 ## Componentes
 
 - `epg-product/app.py`: painel web, autenticação, usuários, fontes e portadoras;
@@ -21,9 +26,9 @@ transcodifica e não retransmite vídeo ou áudio.
 
 ```bash
 docker build -f epg-product/Dockerfile \
-  -t epgserver:v1.10.0 .
+  -t epgserver:v1.11.0 .
 docker build -f license-server/Dockerfile \
-  -t epg-license-server:v1.0.0 .
+  -t epg-license-server:v1.1.0 .
 ```
 
 ## Primeira execução
@@ -79,9 +84,11 @@ portadoras. Sem chave, com licença revogada/expirada, servidor indisponível ou
 quantidade acima do limite, os emissores são interrompidos e novas alterações
 de portadoras são recusadas; o painel continua acessível para diagnóstico.
 
-O servidor independente escuta por padrão somente em `127.0.0.1:9200`. A
-chave completa é exibida uma única vez, é montada no cliente por arquivo e o
-servidor persiste apenas seu SHA-256. Consulte
+O servidor independente escuta por padrão somente em `127.0.0.1:9200`. Na
+versão 1.11/1.1, o administrador pode usar **Ver chave** e **Copiar chave**;
+a recuperação é derivada de um segredo mestre externo e o JSON continua
+persistindo apenas SHA-256, prefixo e versão. O painel EPG oferece **Licença**
+para validar e instalar a chave atomicamente. Consulte
 `license-server/README.md` antes de criar ou distribuir licenças.
 
 ## Validação

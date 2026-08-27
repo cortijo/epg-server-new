@@ -6,11 +6,12 @@ Estas regras valem para todo o repositório.
 
 Antes de alterar o projeto, leia integralmente:
 
-1. `AGENTS.md`;
-2. `GUIA_OPERACIONAL_AGENTES.md`;
-3. `DOCUMENTACAO_EPG_PRODUTO.md`;
-4. `specs/README.md` e `specs/TEMPLATE.md`;
-5. a especificação e o código relacionados à mudança.
+1. `PROJETO.md`;
+2. `AGENTS.md`;
+3. `GUIA_OPERACIONAL_AGENTES.md`;
+4. `DOCUMENTACAO_EPG_PRODUTO.md`;
+5. `specs/README.md` e `specs/TEMPLATE.md`;
+6. a especificação e o código relacionados à mudança.
 
 ## Fluxo obrigatório
 

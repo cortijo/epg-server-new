@@ -36,6 +36,11 @@ servidor de licenças, arquivo secreto, identificador estável e capacidade para
 os canais atuais. Nunca registre a chave, coloque-a em `.env`, passe-a como
 argumento ou exponha o servidor HTTP fora de loopback; em outro host use HTTPS.
 
+Na v1.11/servidor 1.1, preserve e faça backup do segredo mestre separado da
+base. **Ver chave** deriva a chave v2 sem persistir texto puro; a instalação no
+EPG valida antes de substituir o arquivo. Rotação de licença ativa exige
+autorização explícita, cliente v1.11 já em execução e rollback preservado.
+
 O firewall pode ser administrado separadamente por
 `scripts/firewall-manager.sh`. Nunca incorpore essa execução ao instalador do
 produto. Antes de aplicar, use `check` e `render`, confirme que a sessão SSH

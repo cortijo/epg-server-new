@@ -48,6 +48,12 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("URL pública base", self.script)
         self.assertIn('EPG_PUBLIC_BASE_URL=${PUBLIC_BASE_URL}', self.script)
 
+    def test_license_key_directory_is_writable_only_by_runtime_user(self):
+        self.assertIn('--volume "${LICENSE_KEY_DIR}:/license"', self.script)
+        self.assertIn('EPG_LICENSE_KEY_FILE=/license/${LICENSE_KEY_NAME}', self.script)
+        self.assertIn('chmod 0750 "${LICENSE_KEY_DIR}"', self.script)
+        self.assertIn('chmod 0600 "${LICENSE_KEY_FILE}"', self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

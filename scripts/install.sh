@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PRODUCT_VERSION="1.10.0"
+PRODUCT_VERSION="1.11.0"
 DEFAULT_PORT="9100"
 DEFAULT_DATA_DIR="/srv/epg-stream"
 DEFAULT_CONTAINER="epg-stream"
@@ -105,6 +105,9 @@ validate_inputs() {
   fi
   [[ "${LICENSE_SERVER_URL}" =~ ^https?://[^/]+$ ]] || die "A URL do servidor de licenças deve usar http(s) e não pode conter caminho."
   [[ "${LICENSE_KEY_FILE}" == /* && -f "${LICENSE_KEY_FILE}" ]] || die "O arquivo da chave de licença não existe ou não é absoluto."
+  LICENSE_KEY_DIR="$(dirname -- "${LICENSE_KEY_FILE}")"
+  LICENSE_KEY_NAME="$(basename -- "${LICENSE_KEY_FILE}")"
+  [[ "${LICENSE_KEY_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "Nome do arquivo da chave inválido."
   [[ "${INSTALLATION_ID}" =~ ^[a-zA-Z0-9._:-]{8,128}$ ]] || die "Identificador de instalação inválido."
 }
 
@@ -180,10 +183,10 @@ run_application() {
     --env "EPG_HTTP_PORT=${HTTP_PORT}"
     --env "TZ=${TIMEZONE}"
     --env "EPG_LICENSE_SERVER_URL=${LICENSE_SERVER_URL}"
-    --env "EPG_LICENSE_KEY_FILE=/run/secrets/epg_license_key"
+    --env "EPG_LICENSE_KEY_FILE=/license/${LICENSE_KEY_NAME}"
     --env "EPG_LICENSE_INSTALLATION_ID=${INSTALLATION_ID}"
     --volume "${DATA_DIR}:/data"
-    --volume "${LICENSE_KEY_FILE}:/run/secrets/epg_license_key:ro"
+    --volume "${LICENSE_KEY_DIR}:/license"
   )
   if [[ -n "${PUBLIC_BASE_URL}" ]]; then
     args+=(--env "EPG_PUBLIC_BASE_URL=${PUBLIC_BASE_URL}")
@@ -251,6 +254,9 @@ main() {
   ask_default INSTALLATION_ID "Identificador desta instalação" "${DEFAULT_INSTALLATION_ID}"
   PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
   validate_inputs
+  root_run chown "${CONTAINER_UID}:${CONTAINER_UID}" "${LICENSE_KEY_DIR}" "${LICENSE_KEY_FILE}"
+  root_run chmod 0750 "${LICENSE_KEY_DIR}"
+  root_run chmod 0600 "${LICENSE_KEY_FILE}"
 
   local updating=false previous_container="" backup_dir="" stamp
   if container_exists "${CONTAINER_NAME}"; then
