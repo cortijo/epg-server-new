@@ -47,14 +47,14 @@ o candidato e a produção estejam na mesma versão.
 
 ### 2.1 Git e código local
 
-- commit de implementação da v1.11: `5082ba6`;
-- tag prevista para o estado final documentado: `epg-v1.11.0`;
-- `PRODUCT_VERSION` e produção EPG: `1.11.0`;
+- commit de implementação da v1.12: `e7896bc`;
+- tag prevista para o estado final documentado: `epg-v1.12.0`;
+- `PRODUCT_VERSION` e produção EPG: `1.12.0`;
 - servidor de licenças e produção: `1.1.0`;
-- as mudanças de gestão visual da chave foram validadas e promovidas em
-  27/08/2026 às 07:37;
+- o bloqueio integral sem licença e o reinício global foram validados e
+  promovidos em 27/08/2026 às 08:16;
 - a spec da entrega é
-  `specs/2026-08-26-gestao-visual-chave-licenca.md`.
+  `specs/2026-08-27-bloqueio-licenca-reinicio-global.md`.
 
 Nunca descarte o working tree. Antes de qualquer ação execute:
 
@@ -71,7 +71,7 @@ Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.11.0-20260826` |
+| EPG | `epg-stream`, imagem `epgserver:v1.12.0-20260827` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |
@@ -82,44 +82,42 @@ Host operacional conhecido: `181.233.106.46`.
 | Emissores | 27 processos `TVStreamEpgOnly` |
 | Canais licenciados | 63 de 80; o mesmo limite já constava no backup pré-corte |
 | Reinícios dos containers ativos | zero |
-| Rollback EPG imediato | `epg-stream-pre-v1.11.0-20260827-073708` |
+| Rollback EPG imediato | `epg-stream-pre-v1.12.0-20260827-081608` |
 | Rollback licenças imediato | `epg-license-server-pre-v1.1.0-20260827-073708` |
-| Backup EPG | `/srv/epg-stream-backup-pre-v1.11.0-20260827-073708` |
+| Backup EPG | `/srv/epg-stream-backup-pre-v1.12.0-20260827-081608` |
 | Backup autoridade | `epg-license-data-backup-pre-v1.1.0-20260827-073708` |
 | Backup chave cliente | `epg-license-client-backup-pre-v1.11.0-20260827-073708` |
 
-A produção já recebeu a gestão visual da v1.11. A licença ativa foi convertida
-para `key_version=2`, **Ver chave** está disponível e a nova chave foi instalada
-atomicamente no cliente. Novas rotações continuam exigindo autorização e
-backup do mestre, da autoridade e do cliente.
+A produção recebeu o bloqueio integral da v1.12: licença inválida encerra os
+emissores, deixa somente Usuários e Licença operáveis e faz as APIs de gestão
+retornarem HTTP 402. Após revalidação, os fluxos elegíveis retomam. O painel
+também possui **Reiniciar todos os fluxos**. A autoridade permanece na v1.1 e a
+licença ativa continua em `key_version=2`.
 
 ### 2.3 Candidato validado e isolado
 
 | Item | Estado confirmado |
 |---|---|
-| EPG candidato | `epg-v111-candidate-001`, `v1.11.0-20260826-candidate` |
-| Licenças candidato | `epg-license-v111-candidate-001`, `v1.1.0-20260826-candidate` |
-| HTTP | somente loopback, portas `19110` e `19200` |
+| EPG candidato | `epg-v112-candidate`, `v1.12.0-20260827-candidate`, parado após validação |
+| Licenças candidato | autoridade de produção usada somente para validar a cópia da chave |
+| HTTP | somente loopback, porta `19112` |
 | Portadoras carregadas | 27 |
 | Emissores | zero, pois `auto_start` foi desligado somente no clone |
 | Reinícios | zero |
 | Dados | volumes candidatos separados da produção |
 
-Validações já aprovadas no candidato:
+Validações aprovadas no candidato v1.12:
 
-- licença legada clonada foi rotacionada para v2;
-- **Ver chave** recuperou exatamente a chave derivada;
-- **Copiar chave** colocou o valor integral na área de transferência;
-- chave válida foi instalada pela API visual do EPG;
-- chave inválida retornou HTTP 400 e não substituiu o arquivo atual;
-- arquivo do cliente permaneceu com modo `0600`, UID/GID `10001:10001`;
-- o JSON da autoridade não contém a chave em texto puro;
-- licença continuou válida após reinício dos dois candidatos;
-- a cópia não iniciou multicast e não interferiu nos 27 emissores reais.
+- licença válida, 63/80 canais, zero emissores no clone isolado;
+- `restart-all` válido retornou zero porque todas as portadoras do clone foram
+  marcadas para início manual;
+- candidato sem chave manteve estado/usuários/licença acessíveis e respondeu
+  HTTP 402 para fontes, publicações, grade e reinício global;
+- o HTML bloqueado contém o alerta e os controles novos;
+- a cópia não iniciou multicast nem interferiu nos 27 emissores reais.
 
-O script `scripts/_deploy_v111_once.sh` registra o cutover executado da v1.11,
-com backup e rollback. Ele não é um instalador genérico e não deve ser
-executado novamente em outra versão sem revisão completa.
+O script `scripts/_deploy_v112_once.sh` registra o cutover executado da v1.12,
+com candidato inválido, backup e rollback. Ele não é um instalador genérico.
 
 ## 3. Regras invioláveis do produto
 
@@ -360,11 +358,14 @@ sem teste em múltiplos receptores, Dexing e RF.
 - categoria padrão por canal;
 - relógio/fuso/correção por portadora;
 - start, stop, restart, logs e exclusão;
+- reinício conjunto dos fluxos elegíveis;
 - tabela compacta com ações laterais;
 - programação carregada sob demanda;
 - grade horizontal de três horas;
 - estado e consumo da licença;
-- na v1.11 candidata: botão **Licença** para validar e instalar uma chave.
+- botão **Licença** para validar e instalar uma chave;
+- bloqueio integral de XMLTV, grade e portadoras quando a licença é inválida,
+  mantendo apenas Usuários e Licença operáveis.
 
 Formulários não fecham ao clicar no fundo. Fechamento ocorre por Salvar,
 Cancelar ou Fechar.
@@ -386,6 +387,7 @@ contratos; confirme os handlers em `epg-product/app.py` antes de integrar.
 | GET | `/api/guide` | programação de uma portadora |
 | GET/POST | `/api/carriers` | leitura e gravação de portadora |
 | POST | `/api/carriers/start|stop|restart|delete` | operação do emissor |
+| POST | `/api/carriers/restart-all` | reinício global dos fluxos elegíveis, somente admin |
 | GET/POST | `/api/users` | administração de usuários |
 | GET | `/api/license` | força consulta e retorna apenas estado público |
 | POST | `/api/license/key` | v1.11: admin valida e instala chave atomicamente |
@@ -661,16 +663,16 @@ tail -n 200 /srv/epg-stream/logs/ID_DA_PORTADORA.log
 | 1.9.0 | fuso e correção de relógio por portadora |
 | 1.10.0 | licenciamento online por serviços e UI de logo oculta |
 | 1.11.0 | Ver/Copiar chave v2 e instalação visual no EPG; deploy em 27/08/2026 |
+| 1.12.0 | bloqueio integral sem licença e reinício global; deploy em 27/08/2026 |
 
 As specs em `specs/` contêm o histórico detalhado de decisões e evidências.
 
 ## 18. Pendências conhecidas
 
-1. Falta concluir teste visual móvel da gestão de licença.
-2. A UI de logo permanece oculta até homologação confiável em receptores.
-3. O painel usa Basic Auth/HTTP; outro host deve usar proxy HTTPS.
-4. O JSON local não suporta múltiplas réplicas escritoras simultâneas.
-5. Health HTTP não prova multicast ou RF.
+1. A UI de logo permanece oculta até homologação confiável em receptores.
+2. O painel usa Basic Auth/HTTP; outro host deve usar proxy HTTPS.
+3. O JSON local não suporta múltiplas réplicas escritoras simultâneas.
+4. Health HTTP não prova multicast ou RF.
 
 ## 19. Checklist de handoff
 

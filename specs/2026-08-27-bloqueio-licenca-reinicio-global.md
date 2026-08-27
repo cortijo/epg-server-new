@@ -1,7 +1,7 @@
 # Spec: bloqueio integral por licença e reinício global
 
 - ID: `2026-08-27-bloqueio-licenca-reinicio-global`
-- Estado: `validando`
+- Estado: `concluída`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 - Criada em: `2026-08-27`
@@ -56,12 +56,12 @@ administrativa para reiniciar todos os emissores de uma vez.
 
 ## 7. Critérios de aceite
 
-- [ ] Licença inválida encerra todos os processos até o próximo ciclo de validação.
-- [ ] APIs bloqueadas retornam HTTP 402 e mensagem de licença inválida.
-- [ ] O painel exibe `Licença inválida, entre em contato com o suporte` em vermelho.
-- [ ] Apenas Usuários e Licença permanecem habilitados durante o bloqueio.
-- [ ] Uma licença novamente válida retoma automaticamente os fluxos elegíveis.
-- [ ] Reiniciar todos confirma a ação e reinicia os fluxos elegíveis sem alterar dados.
+- [x] Licença inválida encerra todos os processos até o próximo ciclo de validação.
+- [x] APIs bloqueadas retornam HTTP 402 e mensagem de licença inválida.
+- [x] O painel exibe `Licença inválida, entre em contato com o suporte` em vermelho.
+- [x] Apenas Usuários e Licença permanecem habilitados durante o bloqueio.
+- [x] Uma licença novamente válida retoma automaticamente os fluxos elegíveis.
+- [x] Reiniciar todos confirma a ação e reinicia os fluxos elegíveis sem alterar dados.
 
 ## 8. Contratos afetados
 
@@ -101,9 +101,9 @@ Administrador -> restart-all -> Supervisor reinicia fluxos elegíveis
 |---|---|---|---|---|
 | T-01 | unittest Python | local | suíte aprovada | passou |
 | T-02 | sintaxe JS embutido | local | sem erro | passou |
-| T-03 | licença inválida/válida | container isolado | stop e retomada | pendente |
-| T-04 | restart-all | container isolado | processos reiniciados | pendente |
-| T-05 | produção | servidor | health, UI e emissores saudáveis | pendente |
+| T-03 | licença inválida/válida | container isolado | stop e retomada | passou |
+| T-04 | restart-all | container isolado | processos reiniciados | passou |
+| T-05 | produção | servidor | health, UI e emissores saudáveis | passou |
 
 ## 13. Implantação e rollback
 
@@ -119,9 +119,17 @@ Administrador -> restart-all -> Supervisor reinicia fluxos elegíveis
 | 2026-08-27 | testes locais | 44 testes EPG aprovados, 5 skips Bash; 3 testes da autoridade aprovados |
 | 2026-08-27 | API inválida | estado/usuários/licença HTTP 200; fontes/publicações/grade/restart-all HTTP 402 |
 | 2026-08-27 | painel inválido | alerta e cinco grupos de gestão desabilitados em desktop e 390 px |
+| 2026-08-27 08:16 | candidato | licença válida e inválida testadas em loopback; zero multicast |
+| 2026-08-27 08:16 | produção | v1.12.0, 27/27 emissores, licença 63/80, zero reinícios |
 
 ## 15. Resultado final
 
-- Estado final: `em andamento`
-- Critérios de aceite: `0/6 concluídos`
-- Commit/tag/imagem: `a preencher`
+- Estado final: `concluída`
+- Critérios de aceite: `6/6 concluídos`
+- Testes: 44 EPG aprovados, 5 skips Bash; 3 autoridade; JS e API real aprovados.
+- Produção: `epgserver:v1.12.0-20260827`, image ID
+  `sha256:32c5800fb944308b0cdb0c0cfd890482aae4fe3e70e67f818935b8f368ffc247`.
+- Rollback: `epg-stream-pre-v1.12.0-20260827-081608` e backup
+  `/srv/epg-stream-backup-pre-v1.12.0-20260827-081608`.
+- Commit de implementação: `e7896bc`.
+- Tag: `epg-v1.12.0`.
