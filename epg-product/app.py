@@ -34,7 +34,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.11.0"
+PRODUCT_VERSION = "1.12.0"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",
@@ -761,6 +761,30 @@ class Supervisor:
             else:
                 raise ApiError("Ação inválida")
 
+    def restart_all(self) -> dict[str, Any]:
+        snapshot = self.store.snapshot()
+        channel_count = sum(len(item.get("services", [])) for item in snapshot["carriers"])
+        try:
+            self.license.require(channel_count, force=True)
+        except LicenseError as error:
+            raise ApiError(str(error), HTTPStatus.PAYMENT_REQUIRED) from error
+        restarted: list[str] = []
+        errors: list[dict[str, str]] = []
+        with self.lock:
+            eligible = [carrier for carrier in snapshot["carriers"]
+                        if carrier["id"] in self.processes
+                        or not self.runtime.get(carrier["id"], {}).get(
+                            "manual_stop", not carrier.get("auto_start", False))]
+            for carrier in eligible:
+                try:
+                    self.runtime.setdefault(carrier["id"], {})["manual_stop"] = False
+                    self._start_locked(carrier)
+                    restarted.append(carrier["id"])
+                except Exception as error:
+                    errors.append({"id": carrier["id"], "error": str(error)})
+        return {"result": "ok" if not errors else "partial",
+                "restarted": len(restarted), "errors": errors}
+
     def remove(self, carrier_id: str) -> None:
         with self.lock:
             self._stop_locked(carrier_id)
@@ -1449,6 +1473,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.current_user or self.current_user.get("role") != "admin":
             raise ApiError("Apenas administradores podem gerenciar usuários", HTTPStatus.FORBIDDEN)
 
+    def _require_license(self) -> None:
+        assert APP is not None
+        APP.require_license()
+
     def _json(self, value: Any, status: int = HTTPStatus.OK) -> None:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
         self.send_response(status)
@@ -1537,10 +1565,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_admin()
                 self._json({"users": APP.users()})
             elif path == "/api/sources":
+                self._require_license()
                 self._json({"sources": APP.store.snapshot()["sources"]})
             elif path == "/api/publications":
+                self._require_license()
                 self._json({"publications": APP.publications()})
             elif path == "/api/logo":
+                self._require_license()
                 query = self._query()
                 payload = APP.logo_file(
                     query.get("carrier_id", [""])[0], query.get("service_id", [""])[0]
@@ -1553,12 +1584,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(payload)
             elif path == "/api/catalog":
+                self._require_license()
                 source_id = self._query().get("source_id", [""])[0]
                 self._json(APP.catalog(source_id))
             elif path == "/api/guide":
+                self._require_license()
                 carrier_id = self._query().get("carrier_id", [""])[0]
                 self._json(APP.guide(carrier_id))
             elif path == "/api/logs":
+                self._require_license()
                 carrier_id = self._query().get("carrier_id", [""])[0]
                 if not re.fullmatch(r"[A-Za-z0-9_-]+", carrier_id):
                     raise ApiError("ID de portadora inválido")
@@ -1583,6 +1617,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if path == "/api/publications/upload":
+                self._require_license()
                 query = self._query()
                 publication_id = query.get("id", [""])[0]
                 filename = query.get("filename", ["guide.xml"])[0]
@@ -1600,30 +1635,45 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_admin()
                 result = APP.delete_user(str(request.get("id") or ""), str(self.current_user["id"]))
             elif path == "/api/sources":
+                self._require_license()
                 result = APP.save_source(request)
             elif path == "/api/sources/test":
+                self._require_license()
                 source = validate_source(request)
                 guide = APP.guides.get(source, force=True)
                 result = {"result": "ok", "channels": len(guide["channels"]), "programmes": sum(map(len, guide["programmes"].values())), "bytes": guide["bytes"]}
             elif path == "/api/sources/delete":
+                self._require_license()
                 result = APP.delete_source(str(request.get("id") or ""))
             elif path == "/api/publications":
+                self._require_license()
                 result = APP.save_publication(request)
             elif path == "/api/publications/version/delete":
+                self._require_license()
                 result = APP.delete_publication_version(
                     str(request.get("publication_id") or ""), str(request.get("version_id") or "")
                 )
             elif path == "/api/publications/delete":
+                self._require_license()
                 result = APP.delete_publication(str(request.get("id") or ""))
             elif path == "/api/carriers":
+                self._require_license()
                 result = APP.save_carrier(request)
             elif path == "/api/carriers/logo":
+                self._require_license()
                 result = APP.save_logo(request)
             elif path == "/api/carriers/logo/delete":
+                self._require_license()
                 result = APP.delete_logo(request)
             elif path == "/api/carriers/delete":
+                self._require_license()
                 result = APP.delete_carrier(str(request.get("id") or ""))
+            elif path == "/api/carriers/restart-all":
+                self._require_admin()
+                self._require_license()
+                result = APP.supervisor.restart_all()
             elif path.startswith("/api/carriers/"):
+                self._require_license()
                 action = path.rsplit("/", 1)[-1]
                 APP.supervisor.action(str(request.get("id") or ""), action)
                 result = {"result": "ok"}
@@ -1640,8 +1690,9 @@ INDEX_HTML = r'''<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>EPG Stream</title><style>
 :root{--navy:#071b33;--blue:#087ec1;--cyan:#1bb6e8;--bg:#f2f6fa;--card:#fff;--text:#14263a;--muted:#6d7c8d;--line:#dce6ef;--green:#19a974;--red:#df4c55;--amber:#d99a23}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,Segoe UI,Arial,sans-serif}.top{background:linear-gradient(120deg,var(--navy),#0b5689);color:#fff;padding:22px 30px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 8px 28px #071b3330}.brand{display:flex;gap:14px;align-items:center}.logo{width:46px;height:46px;border:2px solid #51c7ed;border-radius:14px;display:grid;place-items:center;font-size:23px;font-weight:800}.brand h1{margin:0;font-size:22px}.brand small{color:#bde8fa}.live{display:flex;gap:8px;align-items:center}.dot{width:9px;height:9px;background:#31dc9a;border-radius:50%;box-shadow:0 0 0 5px #31dc9a22}.wrap{max-width:1500px;margin:0 auto;padding:24px}.toolbar{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-bottom:18px}.toolbar h2{margin:0;font-size:20px}.actions{display:flex;gap:8px;flex-wrap:wrap}button{border:0;border-radius:9px;padding:10px 14px;font-weight:700;cursor:pointer;background:#e7eef5;color:var(--text)}button.primary{background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff}button.danger{color:var(--red)}button:disabled{opacity:.5;cursor:not-allowed}.summary{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:18px}.metric,.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #0b254012}.metric{padding:17px}.metric b{font-size:24px;display:block;margin-top:6px}.metric span{color:var(--muted);font-size:12px}.metric.license-valid{border-color:#8ce2bd}.metric.license-invalid{border-color:#f1a4aa}.muted{color:var(--muted)}.badge{font-size:11px;font-weight:800;text-transform:uppercase;border-radius:999px;padding:5px 8px;background:#eef2f6;white-space:nowrap}.badge.running{background:#dcf8ec;color:#087d56}.badge.error{background:#ffe4e5;color:#b72a34}.table-wrap{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #0b254012;overflow:auto}.carrier-table{width:100%;min-width:1050px;border-collapse:collapse}.carrier-table th{padding:12px 14px;background:#edf4fa;color:#526477;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em}.carrier-table td{padding:14px;border-top:1px solid var(--line);vertical-align:middle}.carrier-table tbody:first-child tr:first-child td{border-top:0}.carrier-table tr.main-row:hover td{background:#f8fbfd}.carrier-name{font-size:15px;font-weight:800}.carrier-sub{margin-top:4px;font-size:12px;color:var(--muted)}.actions-col{width:190px;position:sticky;right:0;background:#fff;box-shadow:-8px 0 14px -14px #071b33;z-index:1}.carrier-table th.actions-col{background:#edf4fa}.action-stack{display:grid;grid-template-columns:1fr 1fr;gap:6px}.action-stack button{padding:8px 9px;font-size:12px}.action-stack .wide{grid-column:1/-1}.program-row{display:none}.program-row.open{display:table-row}.program-row>td{padding:0;background:#f5f9fc}.program-panel{padding:18px 22px}.program-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.program-list{display:grid;gap:8px}.program-line{display:grid;grid-template-columns:1.1fr 80px 120px 2fr 2fr auto;gap:12px;align-items:center;padding:11px 12px;background:#fff;border:1px solid var(--line);border-radius:10px}.program-line button{padding:8px 10px}.program-now{font-weight:750}.progress{height:5px;background:#e6edf3;border-radius:9px;margin-top:6px;overflow:hidden}.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}.empty{padding:50px;text-align:center;color:var(--muted)}.modal-back{position:fixed;inset:0;background:#071b3399;display:grid;place-items:center;padding:20px;z-index:5}.modal{background:#fff;border-radius:16px;width:min(920px,100%);max-height:92vh;overflow:auto;padding:22px;box-shadow:0 24px 70px #0005}.modal h2{margin:0 0 18px}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}label{display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:12px}label.wide{grid-column:1/-1}input,select{width:100%;border:1px solid #cbd8e4;border-radius:8px;padding:10px;background:#fff;color:var(--text)}.service-edit{display:grid;grid-template-columns:1.2fr 1.5fr .6fr auto;gap:8px;margin:8px 0;align-items:end;padding:10px;background:#f5f8fb;border-radius:10px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.guide-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.guide-list{margin-top:14px;display:flex;flex-direction:column;gap:9px}.guide-item{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px}.guide-item.current{border-color:#23aee1;background:#edfaff}.toast{position:fixed;right:20px;bottom:20px;background:var(--navy);color:#fff;padding:13px 17px;border-radius:10px;z-index:9;box-shadow:0 10px 30px #0004}.error-text{color:var(--red)}@media(max-width:760px){.wrap{padding:14px}.summary{grid-template-columns:1fr 1fr}.form-grid{grid-template-columns:1fr}.service-edit{grid-template-columns:1fr}.top{padding:16px}.program-line{grid-template-columns:1fr 70px}.program-line .program-detail{grid-column:1/-1}.actions-col{position:static}.carrier-table{min-width:900px}}
-</style></head><body><header class="top"><div class="brand"><div class="logo">E</div><div><h1>EPG Stream</h1><small>Programação ISDB-TB em multicast</small></div></div><div class="live"><i class="dot"></i><span id="clock">Conectando</span></div></header><main class="wrap"><div class="toolbar"><div><h2>Portadoras e programação</h2><div class="muted">Visualização compacta; expanda uma portadora para consultar a programação.</div></div><div class="actions"><button id="usersButton" style="display:none" onclick="openUsers()">Usuários</button><button onclick="openPublications()">Publicações XMLTV</button><button onclick="openSources()">Fontes XMLTV</button><button id="timelineButton" disabled onclick="openTimeline()">Grade de programação</button><button id="newCarrierButton" class="primary" onclick="openCarrier()">+ Nova portadora</button></div></div><section class="summary"><div class="metric"><span>PORTADORAS</span><b id="mCarriers">0</b></div><div class="metric"><span>EMISSORAS ATIVAS</span><b id="mActive">0</b></div><div class="metric"><span>CANAIS / SERVIÇOS</span><b id="mServices">0</b></div><div class="metric"><span>REINÍCIOS</span><b id="mRestarts">0</b></div><div id="licenseMetric" class="metric license-invalid"><span>LICENÇA</span><b id="mLicense">Verificando</b><small id="licenseReason" class="muted"></small></div></section><section id="carrierTable"></section></main><div id="overlay"></div><div id="toast"></div>
+</style></head><body><header class="top"><div class="brand"><div class="logo">E</div><div><h1>EPG Stream</h1><small>Programação ISDB-TB em multicast</small></div></div><div class="live"><i class="dot"></i><span id="clock">Conectando</span></div></header><main class="wrap"><div id="licenseAlert" class="license-alert" hidden>Licença inválida, entre em contato com o suporte</div><div class="toolbar"><div><h2>Portadoras e programação</h2><div class="muted">Visualização compacta; expanda uma portadora para consultar a programação.</div></div><div class="actions"><button id="usersButton" style="display:none" onclick="openUsers()">Usuários</button><button id="publicationsButton" onclick="openPublications()">Publicações XMLTV</button><button id="sourcesButton" onclick="openSources()">Fontes XMLTV</button><button id="timelineButton" disabled onclick="openTimeline()">Grade de programação</button><button id="restartAllButton" style="display:none" onclick="restartAllCarriers()">Reiniciar todos os fluxos</button><button id="newCarrierButton" class="primary" onclick="openCarrier()">+ Nova portadora</button></div></div><section class="summary"><div class="metric"><span>PORTADORAS</span><b id="mCarriers">0</b></div><div class="metric"><span>EMISSORAS ATIVAS</span><b id="mActive">0</b></div><div class="metric"><span>CANAIS / SERVIÇOS</span><b id="mServices">0</b></div><div class="metric"><span>REINÍCIOS</span><b id="mRestarts">0</b></div><div id="licenseMetric" class="metric license-invalid"><span>LICENÇA</span><b id="mLicense">Verificando</b><small id="licenseReason" class="muted"></small></div></section><section id="carrierTable"></section></main><div id="overlay"></div><div id="toast"></div>
 <script>
+document.head.insertAdjacentHTML('beforeend','<style>.license-alert{margin-bottom:18px;padding:14px 18px;border:1px solid #ef9da4;border-radius:11px;background:#fff0f1;color:#b4232d;font-weight:800;font-size:15px}.license-alert[hidden]{display:none}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.service-edit{grid-template-columns:1fr 1fr 1.25fr .42fr .9fr 1.1fr auto}.logo-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.logo-tools button{padding:8px}.logo-preview{width:64px;height:36px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px}.logo-status{font-size:11px;color:var(--muted)}@media(max-width:1100px){.service-edit{grid-template-columns:1fr 1fr}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.modal.timeline-modal{width:min(1420px,100%);padding:0;overflow:hidden}.timeline-head{padding:22px 24px 16px;border-bottom:1px solid var(--line)}.timeline-tools{display:flex;gap:9px;align-items:end;flex-wrap:wrap}.timeline-tools label{min-width:240px}.timeline-scroll{overflow:auto;max-height:70vh;background:#f8fbfd}.timeline-board{min-width:1120px}.timeline-axis,.timeline-row{display:grid;grid-template-columns:180px 1fr}.timeline-axis{position:sticky;top:0;z-index:4;background:#eef5fa;border-bottom:1px solid #cbd8e4}.timeline-corner,.timeline-channel{position:sticky;left:0;z-index:3;background:#fff;border-right:1px solid #cbd8e4}.timeline-corner{background:#eef5fa;padding:13px 14px;font-weight:800}.timeline-hours{position:relative;height:45px;background:repeating-linear-gradient(to right,transparent 0,transparent calc(16.666% - 1px),#cbd8e4 calc(16.666% - 1px),#cbd8e4 16.666%)}.timeline-hour{position:absolute;top:13px;transform:translateX(8px);font-size:12px;font-weight:750;color:#526477}.timeline-row{min-height:82px;border-bottom:1px solid var(--line)}.timeline-channel{display:flex;gap:9px;align-items:center;padding:10px 12px}.timeline-channel img{width:54px;height:36px;object-fit:contain}.timeline-channel strong{display:block}.timeline-track{position:relative;min-height:82px;background:repeating-linear-gradient(to right,#fff 0,#fff calc(16.666% - 1px),#e1e8ee calc(16.666% - 1px),#e1e8ee 16.666%)}.timeline-program{position:absolute;top:7px;height:68px;overflow:hidden;padding:8px 9px;border:1px solid #a9cde2;border-radius:8px;background:linear-gradient(145deg,#e9f7ff,#d8eefb);color:#0a426a;text-align:left;font-weight:600}.timeline-program.current{background:linear-gradient(145deg,#087ec1,#14a9dd);border-color:#087ec1;color:#fff}.timeline-program b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.timeline-program small{display:block;margin-top:5px;opacity:.8}.timeline-empty{padding:29px 14px;color:var(--muted)}.timeline-now{position:absolute;top:0;bottom:0;width:2px;background:#df4c55;z-index:2;pointer-events:none}.timeline-now:before{content:"Agora";position:absolute;top:2px;left:4px;background:#df4c55;color:#fff;padding:2px 5px;border-radius:4px;font-size:9px;font-weight:800}.timeline-now.track:before{display:none}@media(max-width:760px){.modal-back{padding:8px}.modal.timeline-modal{max-height:96vh}.timeline-head{padding:16px}.timeline-tools label{min-width:100%}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.modal.publication-modal{width:min(1180px,100%)}.publication-card{border:1px solid var(--line);border-radius:13px;padding:16px;margin-top:13px;background:#f9fbfd}.publication-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.publication-url{display:flex;gap:7px;margin:12px 0}.publication-url input{font-family:Consolas,monospace;font-size:12px}.version-table{width:100%;border-collapse:collapse;background:#fff}.version-table th,.version-table td{padding:9px;border-top:1px solid var(--line);text-align:left;font-size:12px}.version-table th{color:var(--muted);font-size:10px;text-transform:uppercase}.upload-label{display:inline-flex;flex-direction:row;align-items:center;background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff;border-radius:9px;padding:10px 14px;cursor:pointer}.upload-label input{display:none}@media(max-width:760px){.publication-title,.publication-url{flex-direction:column}.version-table{min-width:850px}}</style>');
@@ -1650,11 +1701,11 @@ document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin'
 const fmt=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'--:--';
 function toast(message,error=false){el('toast').innerHTML=`<div class="toast ${error?'error-text':''}">${esc(message)}</div>`;setTimeout(()=>el('toast').innerHTML='',3500)}
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt});const j=await r.json().catch(()=>({error:'Resposta inválida'}));if(!r.ok||j.error)throw Error(j.error||`HTTP ${r.status}`);return j}
-async function refresh(){try{const loaded=await Promise.all([api('/api/state'),api('/api/sources'),api('/api/session')]);state=loaded[0];sources=loaded[1].sources;session=loaded[2];const admin=session.user?.role==='admin';el('usersButton').style.display=admin?'':'none';el('licenseButton').style.display=admin?'':'none';el('timelineButton').disabled=!(state.carriers||[]).length;el('newCarrierButton').disabled=!state.license?.valid;render();el('clock').textContent=`${session.user?.display_name||''} · ${new Date().toLocaleTimeString('pt-BR')}`}catch(e){toast(e.message,true)}}
+async function refresh(){try{const loaded=await Promise.all([api('/api/state'),api('/api/session')]);state=loaded[0];session=loaded[1];const valid=!!state.license?.valid,admin=session.user?.role==='admin';sources=valid?(await api('/api/sources')).sources:[];el('usersButton').style.display=admin?'':'none';el('licenseButton').style.display=admin?'':'none';el('restartAllButton').style.display=admin?'':'none';for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton'])el(id).disabled=!valid;el('timelineButton').disabled=!valid||!(state.carriers||[]).length;el('licenseAlert').hidden=valid;render();el('clock').textContent=`${session.user?.display_name||''} · ${new Date().toLocaleTimeString('pt-BR')}`}catch(e){toast(e.message,true)}}
 function render(){const cs=state.carriers||[],license=state.license||{};el('mCarriers').textContent=cs.length;el('mActive').textContent=cs.filter(c=>c.active).length;el('mServices').textContent=cs.reduce((n,c)=>n+c.services.length,0);el('mRestarts').textContent=cs.reduce((n,c)=>n+(c.restart_count||0),0);el('mLicense').textContent=license.valid?`${license.channel_count}/${license.max_channels}`:'Bloqueada';el('licenseReason').textContent=license.valid?'canais utilizados':license.reason||'Licença inválida';el('licenseMetric').className=`metric ${license.valid?'license-valid':'license-invalid'}`;el('carrierTable').innerHTML=cs.length?`<div class="table-wrap"><table class="carrier-table"><thead><tr><th>Portadora</th><th>Destino multicast</th><th>Canais</th><th>Estado</th><th class="actions-col">Ações</th></tr></thead><tbody>${cs.map(carrierRows).join('')}</tbody></table></div>`:'<div class="card empty"><h3>Nenhuma portadora cadastrada</h3><p>Cadastre a primeira portadora e associe os canais do XMLTV.</p></div>'}
 function utcOffsetLabel(minutes){const sign=minutes<0?'-':'+';const absolute=Math.abs(minutes);return `UTC${sign}${String(Math.floor(absolute/60)).padStart(2,'0')}:${String(absolute%60).padStart(2,'0')}`}
 function clockLabel(c){return c.clock_mode==='custom'?`${utcOffsetLabel(c.clock_utc_offset_minutes??-180)} · correção ${c.clock_correction_minutes>0?'+':''}${c.clock_correction_minutes||0} min`:'Padrão UTC-03:00'}
-function carrierRows(c){const opened=expandedCarriers.has(c.id),guide=guideCache[c.id];return `<tr class="main-row"><td><div class="carrier-name">${esc(c.name)}</div><div class="carrier-sub">TSID ${c.transport_stream_id} · ONID ${c.original_network_id} · ${esc(clockLabel(c))}</div></td><td><b>${esc(c.destination)}:${c.port}</b><div class="carrier-sub">${(c.bitrate/1000).toLocaleString('pt-BR')} kbit/s</div></td><td><b>${c.services.length}</b> serviço(s)</td><td><span class="badge ${esc(c.status)}">${c.active?'Em transmissão':c.status==='error'?'Falha':'Parada'}</span>${c.last_error?`<div class="error-text carrier-sub">${esc(c.last_error)}</div>`:''}</td><td class="actions-col"><div class="action-stack"><button id="programButton-${esc(c.id)}" class="primary wide" aria-expanded="${opened}" onclick="togglePrograms('${esc(c.id)}')">${opened?'Ocultar programação':'Ver programação'}</button><button onclick="actionCarrier('${esc(c.id)}','${c.active?'restart':'start'}')">${c.active?'Reiniciar':'Iniciar'}</button>${c.active?`<button onclick="actionCarrier('${esc(c.id)}','stop')">Parar</button>`:'<span></span>'}<button onclick="openCarrier('${esc(c.id)}')">Editar</button><button onclick="cloneCarrier('${esc(c.id)}')">Clonar</button><button onclick="openLogs('${esc(c.id)}')">Logs</button><button class="danger" onclick="deleteCarrier('${esc(c.id)}')">Excluir</button></div></td></tr><tr id="programs-${esc(c.id)}" class="program-row ${opened?'open':''}"><td colspan="5"><div class="program-panel">${opened?(guide?programPanel(c,guide):'<div class="muted">Carregando programação…</div>'):''}</div></td></tr>`}
+function carrierRows(c){const opened=expandedCarriers.has(c.id),guide=guideCache[c.id],disabled=state.license?.valid?'':' disabled';return `<tr class="main-row"><td><div class="carrier-name">${esc(c.name)}</div><div class="carrier-sub">TSID ${c.transport_stream_id} · ONID ${c.original_network_id} · ${esc(clockLabel(c))}</div></td><td><b>${esc(c.destination)}:${c.port}</b><div class="carrier-sub">${(c.bitrate/1000).toLocaleString('pt-BR')} kbit/s</div></td><td><b>${c.services.length}</b> serviço(s)</td><td><span class="badge ${esc(c.status)}">${c.active?'Em transmissão':c.status==='error'?'Falha':'Parada'}</span>${c.last_error?`<div class="error-text carrier-sub">${esc(c.last_error)}</div>`:''}</td><td class="actions-col"><div class="action-stack"><button id="programButton-${esc(c.id)}" class="primary wide" aria-expanded="${opened}" onclick="togglePrograms('${esc(c.id)}')"${disabled}>${opened?'Ocultar programação':'Ver programação'}</button><button onclick="actionCarrier('${esc(c.id)}','${c.active?'restart':'start'}')"${disabled}>${c.active?'Reiniciar':'Iniciar'}</button>${c.active?`<button onclick="actionCarrier('${esc(c.id)}','stop')"${disabled}>Parar</button>`:'<span></span>'}<button onclick="openCarrier('${esc(c.id)}')"${disabled}>Editar</button><button onclick="cloneCarrier('${esc(c.id)}')"${disabled}>Clonar</button><button onclick="openLogs('${esc(c.id)}')"${disabled}>Logs</button><button class="danger" onclick="deleteCarrier('${esc(c.id)}')"${disabled}>Excluir</button></div></td></tr><tr id="programs-${esc(c.id)}" class="program-row ${opened?'open':''}"><td colspan="5"><div class="program-panel">${opened?(guide?programPanel(c,guide):'<div class="muted">Carregando programação…</div>'):''}</div></td></tr>`}
 function programPanel(c,g){return `<div class="program-title"><div><b>Programação da portadora</b><div class="muted">${esc(g.timezone||'America/Sao_Paulo')} · ${c.services.length} serviço(s)</div></div></div><div class="program-list">${g.services.map(s=>`<div class="program-line"><div><b>${esc(s.name)}</b><div class="muted">${esc(s.epg_channel_id)}</div></div><div>SID ${s.service_id}</div><div class="program-detail"><small class="muted">HORÁRIO</small><div>${s.current?`${fmt(s.current.start)}–${fmt(s.current.stop)}`:'--:--'}</div></div><div class="program-detail"><small class="muted">NO AR AGORA</small><div class="program-now">${esc(s.current?.title||'Sem programa no ar')}</div>${s.current?`<div class="progress"><i style="width:${s.current.progress||0}%"></i></div>`:''}</div><div class="program-detail"><small class="muted">A SEGUIR</small><div>${esc(s.next?.title||'Sem próxima atração')}</div></div><button onclick="openGuide('${esc(c.id)}','${esc(s.id)}')">Ver grade</button></div>`).join('')||'<div class="muted">Nenhum serviço cadastrado.</div>'}</div>`}
 const TIMELINE_WINDOW=3*60*60,TIMELINE_STEP=90*60;
 function defaultTimelineStart(){return Math.floor(Date.now()/1000/1800)*1800}
@@ -1680,6 +1731,7 @@ async function saveCarrier(){try{const original=state.carriers.find(c=>c.id===el
 async function uploadLogo(input){const file=input.files?.[0],carrierId=el('cId').value,serviceId=input.closest('.service-edit').querySelector('.s-id').value;if(!file)return;if(file.type!=='image/png'){toast('Selecione um arquivo PNG',true);return}if(file.size>2*1024*1024){toast('O logo deve possuir no máximo 2 MiB',true);return}try{const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file)});await api('/api/carriers/logo',{method:'POST',body:JSON.stringify({carrier_id:carrierId,service_id:serviceId,data})});closeModal();toast('Logo ISDB-TB salvo em seis formatos');await refresh();openCarrier(carrierId)}catch(e){toast(e.message,true)}}
 async function deleteLogo(button){if(!confirm('Remover o logo deste canal?'))return;const row=button.closest('.service-edit');try{const carrierId=el('cId').value;await api('/api/carriers/logo/delete',{method:'POST',body:JSON.stringify({carrier_id:carrierId,service_id:row.querySelector('.s-id').value})});closeModal();toast('Logo removido');await refresh();openCarrier(carrierId)}catch(e){toast(e.message,true)}}
 async function actionCarrier(id,action){try{await api(`/api/carriers/${action}`,{method:'POST',body:JSON.stringify({id})});toast('Ação executada');setTimeout(refresh,400)}catch(e){toast(e.message,true)}}
+async function restartAllCarriers(){if(!confirm('Reiniciar agora todos os fluxos que deveriam estar ativos?'))return;try{const result=await api('/api/carriers/restart-all',{method:'POST',body:'{}'});toast(result.errors?.length?`${result.restarted} fluxo(s) reiniciado(s); ${result.errors.length} falha(s)`:`${result.restarted} fluxo(s) reiniciado(s)`);setTimeout(refresh,500)}catch(e){toast(e.message,true)}}
 async function deleteCarrier(id){if(!confirm('Excluir esta portadora?'))return;try{await api('/api/carriers/delete',{method:'POST',body:JSON.stringify({id})});toast('Portadora excluída');refresh()}catch(e){toast(e.message,true)}}
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
 async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encodeURIComponent(id)}`);modal(`<h2>Logs do emissor</h2><pre style="background:#071b33;color:#dff4ff;padding:16px;border-radius:10px;max-height:65vh;overflow:auto;white-space:pre-wrap">${esc(j.log||'Sem logs.')}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true)}}

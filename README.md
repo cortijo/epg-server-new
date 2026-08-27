@@ -81,8 +81,11 @@ O painel usa TCP `9100` e a emissão multicast usa a rede do host. Leia
 A partir da versão 1.10.0, o EPG Stream exige uma licença online válida. O
 limite conta os **canais/serviços** de todas as portadoras, não a quantidade de
 portadoras. Sem chave, com licença revogada/expirada, servidor indisponível ou
-quantidade acima do limite, os emissores são interrompidos e novas alterações
-de portadoras são recusadas; o painel continua acessível para diagnóstico.
+quantidade acima do limite, os emissores são interrompidos. Na versão 1.12,
+fontes, publicações, grade e toda a gestão de portadoras retornam HTTP 402 e
+ficam desabilitadas no painel; somente Usuários e Licença permanecem
+operáveis. Uma licença novamente válida retoma automaticamente os fluxos que
+não estavam parados manualmente.
 
 O servidor independente escuta por padrão somente em `127.0.0.1:9200`. Na
 versão 1.11/1.1, o administrador pode usar **Ver chave** e **Copiar chave**;
@@ -120,6 +123,7 @@ permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
   transporte de logos já cadastrados continuam preservados;
 - a licença online controla o total de canais/serviços e opera em modo
   fail-closed;
+- o painel permite reiniciar de uma vez todos os fluxos elegíveis;
 - a homologação final sempre deve considerar a saída do multiplexador e o RF,
   não apenas o multicast auxiliar.
 

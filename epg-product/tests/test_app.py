@@ -310,7 +310,7 @@ class EpgProductTests(unittest.TestCase):
 
     def test_timeline_guide_has_carrier_filter_and_navigation(self):
         self.assertIn('id="timelineButton" disabled onclick="openTimeline()"', INDEX_HTML)
-        self.assertIn('el(\'timelineButton\').disabled=!(state.carriers||[]).length', INDEX_HTML)
+        self.assertIn("el('timelineButton').disabled=!valid||!(state.carriers||[]).length", INDEX_HTML)
         self.assertIn("function renderTimeline(g)", INDEX_HTML)
         self.assertIn("const TIMELINE_WINDOW=3*60*60,TIMELINE_STEP=90*60", INDEX_HTML)
         self.assertIn('id="timelineCarrier"', INDEX_HTML)
@@ -337,6 +337,46 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("el('licenseButton').style.display=admin?'':'none'", INDEX_HTML)
         source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertIn('elif path == "/api/license/key":\n                self._require_admin()', source)
+
+    def test_invalid_license_blocks_management_ui_and_backend(self):
+        self.assertIn('id="licenseAlert"', INDEX_HTML)
+        self.assertIn('Licença inválida, entre em contato com o suporte', INDEX_HTML)
+        for control in ["publicationsButton", "sourcesButton", "timelineButton",
+                        "restartAllButton", "newCarrierButton"]:
+            self.assertIn(control, INDEX_HTML)
+        self.assertIn("for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton'])el(id).disabled=!valid", INDEX_HTML)
+        self.assertIn("const valid=!!state.license?.valid", INDEX_HTML)
+        self.assertIn("disabled=state.license?.valid?'':' disabled'", INDEX_HTML)
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn("def _require_license(self) -> None:", source)
+        self.assertIn('elif path == "/api/carriers/restart-all":', source)
+        self.assertIn("self._require_license()", source)
+
+    def test_restart_all_only_restarts_eligible_flows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "epg-product.json")
+            store.data["carriers"] = [
+                {"id": "running", "auto_start": True, "services": [{}]},
+                {"id": "manual", "auto_start": False, "services": [{}]},
+            ]
+            license_manager = mock.MagicMock()
+            supervisor = Supervisor(
+                store, "/bin/false", Path(directory) / "logs", license_manager)
+            supervisor.runtime = {
+                "running": {"manual_stop": False},
+                "manual": {"manual_stop": True},
+            }
+            started = []
+            supervisor._start_locked = lambda carrier: started.append(carrier["id"])
+            result = supervisor.restart_all()
+            license_manager.require.assert_called_once_with(2, force=True)
+            self.assertEqual(started, ["running"])
+            self.assertEqual(result, {"result": "ok", "restarted": 1, "errors": []})
+
+    def test_restart_all_ui_requires_confirmation(self):
+        self.assertIn('onclick="restartAllCarriers()"', INDEX_HTML)
+        self.assertIn("confirm('Reiniciar agora todos os fluxos que deveriam estar ativos?')", INDEX_HTML)
+        self.assertIn("/api/carriers/restart-all", INDEX_HTML)
 
     def test_publications_ui_has_raw_upload_and_stable_url(self):
         self.assertIn('onclick="openPublications()">Publicações XMLTV', INDEX_HTML)

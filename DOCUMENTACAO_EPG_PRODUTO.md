@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada e implantada: **1.11.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.12.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -355,6 +355,7 @@ HTTP Basic.
 | POST | `/api/carriers/start` | iniciar emissor |
 | POST | `/api/carriers/stop` | parar sem auto-restart |
 | POST | `/api/carriers/restart` | reiniciar emissor |
+| POST | `/api/carriers/restart-all` | reiniciar todos os emissores elegíveis (administrador) |
 | POST | `/api/carriers/delete` | parar e excluir |
 | GET | `/api/logs?carrier_id=ID` | últimas linhas |
 
@@ -376,9 +377,12 @@ O painel e `/api/state` recebem somente o estado público, nunca a chave.
 
 O comportamento é fail-closed: configuração ausente, resposta inválida,
 indisponibilidade, revogação, expiração, vínculo divergente ou excesso de
-canais interrompem os emissores. O painel continua disponível; `/health`
-retorna 503 e a alteração de portadora que não cabe na licença retorna 402 sem
-persistir. `start` e `restart` também revalidam antes de executar.
+canais interrompem os emissores. O painel continua disponível, mas somente
+Usuários e Licença permanecem operáveis; fontes, publicações, grade, logs e
+gestão de portadoras retornam HTTP 402. `/health` retorna 503. `start`,
+`restart` e `restart-all` também revalidam antes de executar. Quando a licença
+volta a ser válida, o supervisor retoma os emissores que não estavam parados
+manualmente.
 
 Variáveis obrigatórias:
 
@@ -609,6 +613,9 @@ O cabeçalho da janela de Fontes XMLTV contém **Fechar**. O botão chama apenas
 - fonte padrão por portadora e sobreposição de fonte por canal;
 - upload, troca, remoção e miniatura autenticada do logo;
 - Start, Stop, Restart, exclusão e consulta de logs;
+- reinício conjunto de todos os fluxos elegíveis pelo administrador;
+- bloqueio visual e operacional das funções de XMLTV/grade/portadoras quando a
+  licença estiver inválida, com alerta explícito para contato com o suporte;
 - tabela compacta com ações laterais;
 - programação recolhida, carregada somente ao clicar;
 - visão do programa atual, próximo, progresso e grade diária;
