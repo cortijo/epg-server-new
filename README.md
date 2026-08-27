@@ -57,6 +57,11 @@ O gerenciador mantém uma tabela nftables exclusiva e não limpa regras Docker.
 Consulte a seção 10.8 de `DOCUMENTACAO_EPG_PRODUTO.md` antes da primeira
 aplicação.
 
+Para instalações que usam listas simples em `/opt/redes-liberadas` e
+`/opt/portas-liberadas`, consulte
+[`FIREWALL_REDES_LIBERADAS.md`](FIREWALL_REDES_LIBERADAS.md). Esse perfil é
+separado do gerenciador avançado e preserva o multicast de saída.
+
 Para ver as opções sem executar a instalação:
 
 ```bash
