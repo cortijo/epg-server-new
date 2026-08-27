@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada para a entrega: **1.12.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.12.1**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -390,7 +390,7 @@ Variáveis obrigatórias:
 EPG_LICENSE_SERVER_URL=http://127.0.0.1:9200
 EPG_LICENSE_KEY_FILE=/run/secrets/epg_license_key
 EPG_LICENSE_INSTALLATION_ID=identificador-estavel
-EPG_LICENSE_CHECK_SECONDS=60
+EPG_LICENSE_CHECK_SECONDS=43200
 ```
 
 O servidor, sua API, bootstrap, backup e limites de segurança estão documentados

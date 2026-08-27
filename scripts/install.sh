@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PRODUCT_VERSION="1.11.0"
+PRODUCT_VERSION="1.12.1"
 DEFAULT_PORT="9100"
 DEFAULT_DATA_DIR="/srv/epg-stream"
 DEFAULT_CONTAINER="epg-stream"

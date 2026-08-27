@@ -34,7 +34,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.12.0"
+PRODUCT_VERSION = "1.12.1"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",
@@ -856,7 +856,7 @@ class Application:
                  bootstrap_user: str = "", bootstrap_password: str = "",
                  public_base_url: str = "", license_server_url: str = "",
                  license_key_file: str = "", license_installation_id: str = "",
-                 license_check_seconds: int = 60):
+                 license_check_seconds: int = 43200):
         self.data_dir = data_dir
         self.public_base_url = public_base_url.strip().rstrip("/")
         self.logo_dir = data_dir / "logos"
@@ -1770,7 +1770,7 @@ def main() -> None:
     license_server_url = os.environ.get("EPG_LICENSE_SERVER_URL", "")
     license_key_file = os.environ.get("EPG_LICENSE_KEY_FILE", "")
     license_installation_id = os.environ.get("EPG_LICENSE_INSTALLATION_ID", "")
-    license_check_seconds = int(os.environ.get("EPG_LICENSE_CHECK_SECONDS", "60"))
+    license_check_seconds = int(os.environ.get("EPG_LICENSE_CHECK_SECONDS", "43200"))
     data_dir = Path(os.environ.get("EPG_DATA_DIR", "/data"))
     binary = os.environ.get("EPG_EMITTER_BINARY", "/app/TVStreamEpgOnly")
     if not Path(binary).is_file():

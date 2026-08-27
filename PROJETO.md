@@ -48,8 +48,8 @@ o candidato e a produção estejam na mesma versão.
 ### 2.1 Git e código local
 
 - commit de implementação da v1.12: `e7896bc`;
-- tag prevista para o estado final documentado: `epg-v1.12.0`;
-- `PRODUCT_VERSION` e produção EPG: `1.12.0`;
+- tag prevista para o estado final documentado: `epg-v1.12.1`;
+- `PRODUCT_VERSION`: `1.12.1`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
@@ -93,6 +93,12 @@ emissores, deixa somente Usuários e Licença operáveis e faz as APIs de gestã
 retornarem HTTP 402. Após revalidação, os fluxos elegíveis retomam. O painel
 também possui **Reiniciar todos os fluxos**. A autoridade permanece na v1.1 e a
 licença ativa continua em `key_version=2`.
+
+Uma instalação cliente adicional em `187.19.16.59` foi promovida em 27/08/2026
+para `epgserver:v1.12.1-20260827`. Ela valida automaticamente a licença a cada
+43200 segundos, opera com cinco portadoras/dez canais e preserva rollback em
+`epg-stream-pre-v1.12.1-20260827`. A v1.12.1 também garante uma primeira
+consulta real mesmo quando o uptime do host ainda é menor que o intervalo.
 
 ### 2.3 Candidato validado e isolado
 
@@ -664,6 +670,7 @@ tail -n 200 /srv/epg-stream/logs/ID_DA_PORTADORA.log
 | 1.10.0 | licenciamento online por serviços e UI de logo oculta |
 | 1.11.0 | Ver/Copiar chave v2 e instalação visual no EPG; deploy em 27/08/2026 |
 | 1.12.0 | bloqueio integral sem licença e reinício global; deploy em 27/08/2026 |
+| 1.12.1 | validação automática padrão a cada 12 horas e correção do primeiro check vazio |
 
 As specs em `specs/` contêm o histórico detalhado de decisões e evidências.
 

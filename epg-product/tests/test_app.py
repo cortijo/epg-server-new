@@ -17,6 +17,32 @@ from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_license_default_interval_is_12_hours_and_allows_long_overrides(self):
+        manager = LicenseManager("http://license.test:9200", "license.key", "install-001")
+        self.assertEqual(manager.check_seconds, 43200)
+        manager = LicenseManager(
+            "http://license.test:9200", "license.key", "install-001", 86400)
+        self.assertEqual(manager.check_seconds, 86400)
+        manager = LicenseManager(
+            "http://license.test:9200", "license.key", "install-001", 9999999)
+        self.assertEqual(manager.check_seconds, 604800)
+
+    def test_license_first_check_is_never_satisfied_by_empty_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "license.key"
+            key_path.write_text("EPG-" + "a" * 48, encoding="utf-8")
+            manager = LicenseManager(
+                "http://license.test:9200", str(key_path), "install-001", 43200)
+            expected = {
+                "valid": True, "reason": "Licença válida", "name": "Teste",
+                "max_channels": 10, "channel_count": 1, "expires_at": 0,
+                "checked_at": 1,
+            }
+            with mock.patch.object(manager, "_validate_key", return_value=expected) as validate:
+                status = manager.check(1)
+            validate.assert_called_once()
+            self.assertTrue(status["valid"])
+
     def test_license_client_is_fail_closed_and_never_exposes_key(self):
         with tempfile.TemporaryDirectory() as directory:
             key_path = Path(directory) / "license.key"

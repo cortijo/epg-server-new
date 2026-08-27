@@ -24,11 +24,11 @@ KEY_PATTERN = re.compile(r"^EPG-[A-Za-z0-9_-]{40,80}$")
 
 class LicenseManager:
     def __init__(self, server_url: str, key_file: str, installation_id: str,
-                 check_seconds: int = 60, timeout: int = 5):
+                 check_seconds: int = 43200, timeout: int = 5):
         self.server_url = server_url.strip().rstrip("/")
         self.key_file = Path(key_file) if key_file else None
         self.installation_id = installation_id.strip()
-        self.check_seconds = max(10, min(3600, int(check_seconds)))
+        self.check_seconds = max(10, min(604800, int(check_seconds)))
         self.timeout = max(1, min(30, int(timeout)))
         self.lock = threading.RLock()
         self.last_check_monotonic = 0.0
@@ -86,7 +86,8 @@ class LicenseManager:
     def check(self, channel_count: int, force: bool = False) -> dict[str, Any]:
         with self.lock:
             now = time.monotonic()
-            if not force and now - self.last_check_monotonic < self.check_seconds \
+            if not force and self.last_check_monotonic > 0 \
+                    and now - self.last_check_monotonic < self.check_seconds \
                     and int(self.status.get("channel_count", -1)) == int(channel_count):
                 return copy.deepcopy(self.status)
             self.last_check_monotonic = now
