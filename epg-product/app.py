@@ -34,7 +34,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.12.2"
+PRODUCT_VERSION = "1.13.0"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",
@@ -645,8 +645,10 @@ class Supervisor:
         self.store = store
         self.binary = binary
         self.log_dir = log_dir
+        self.diagnostic_dir = self.log_dir.parent / "diagnostics"
         self.license = license_manager or LicenseManager("", "", "unconfigured")
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.diagnostic_dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.processes: dict[str, subprocess.Popen[bytes]] = {}
         self.log_handles: dict[str, Any] = {}
@@ -701,6 +703,7 @@ class Supervisor:
                 int(carrier.get("clock_utc_offset_minutes", -180))),
             "EPG_CLOCK_CORRECTION_SECONDS": str(
                 int(carrier.get("clock_correction_minutes", 0)) * 60),
+            "EPG_DIAGNOSTIC_DIR": str(self.diagnostic_dir),
         })
         return environment
 
@@ -760,6 +763,61 @@ class Supervisor:
                 self._start_locked(carrier)
             else:
                 raise ApiError("Ação inválida")
+
+    def audit(self, carrier_id: str, seconds: int = 8) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", carrier_id):
+            raise ApiError("ID de portadora inválido")
+        snapshot = self.store.snapshot()
+        carrier = next((item for item in snapshot["carriers"] if item["id"] == carrier_id), None)
+        if not carrier:
+            raise ApiError("Portadora não encontrada", HTTPStatus.NOT_FOUND)
+        with self.lock:
+            process = self.processes.get(carrier_id)
+            if not process or process.poll() is not None:
+                raise ApiError("Inicie a portadora antes de executar o simulador")
+        seconds = max(2, min(int(seconds), 8))
+        request_path = self.diagnostic_dir / f"{carrier_id}.request"
+        sample_path = self.diagnostic_dir / f"{carrier_id}.ts"
+        temporary_path = self.diagnostic_dir / f"{carrier_id}.ts.tmp"
+        for path in (sample_path, temporary_path):
+            path.unlink(missing_ok=True)
+        request_temporary = request_path.with_suffix(".request.tmp")
+        request_temporary.write_text(str(seconds), encoding="ascii")
+        os.replace(request_temporary, request_path)
+        deadline = time.monotonic() + seconds + 8
+        while time.monotonic() < deadline:
+            if sample_path.exists() and sample_path.stat().st_size:
+                break
+            if process.poll() is not None:
+                raise ApiError("O emissor encerrou durante a captura")
+            time.sleep(0.15)
+        if not sample_path.exists() or not sample_path.stat().st_size:
+            raise ApiError("O emissor não entregou a amostra no tempo esperado")
+        command = [
+            "python3", os.environ.get("EPG_AUDITOR_SCRIPT", "/app/verify_isdbtb_ts.py"),
+            str(sample_path), "--tsid", str(carrier["transport_stream_id"]),
+            "--onid", str(carrier["original_network_id"]), "--epg-only",
+        ]
+        for index, service in enumerate(carrier["services"]):
+            command.extend(["--service-id", str(service["service_id"])])
+            command.extend(["--pmt-pid", str(carrier["pmt_pid"] + index)])
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        try:
+            report = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise ApiError("O auditor não conseguiu interpretar a amostra") from error
+        report["carrier"] = {
+            "id": carrier["id"], "name": carrier["name"],
+            "destination": carrier["destination"], "port": carrier["port"],
+            "interface_address": carrier["interface_address"],
+            "transport_stream_id": carrier["transport_stream_id"],
+            "original_network_id": carrier["original_network_id"],
+            "services": [{"name": item["name"], "service_id": item["service_id"]}
+                         for item in carrier["services"]],
+        }
+        report["required_passthrough"] = ["0x0012 -> 0x0012", "0x0014 -> 0x0014"]
+        report["sample_seconds"] = seconds
+        return report
 
     def restart_all(self) -> dict[str, Any]:
         snapshot = self.store.snapshot()
@@ -1672,6 +1730,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_admin()
                 self._require_license()
                 result = APP.supervisor.restart_all()
+            elif path == "/api/carriers/audit":
+                self._require_license()
+                result = APP.supervisor.audit(
+                    str(request.get("id") or ""), int(request.get("seconds", 8)))
             elif path.startswith("/api/carriers/"):
                 self._require_license()
                 action = path.rsplit("/", 1)[-1]
@@ -1698,10 +1760,11 @@ document.head.insertAdjacentHTML('beforeend','<style>.modal.timeline-modal{width
 document.head.insertAdjacentHTML('beforeend','<style>.modal.publication-modal{width:min(1180px,100%)}.publication-card{border:1px solid var(--line);border-radius:13px;padding:16px;margin-top:13px;background:#f9fbfd}.publication-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.publication-url{display:flex;gap:7px;margin:12px 0}.publication-url input{font-family:Consolas,monospace;font-size:12px}.version-table{width:100%;border-collapse:collapse;background:#fff}.version-table th,.version-table td{padding:9px;border-top:1px solid var(--line);text-align:left;font-size:12px}.version-table th{color:var(--muted);font-size:10px;text-transform:uppercase}.upload-label{display:inline-flex;flex-direction:row;align-items:center;background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff;border-radius:9px;padding:10px 14px;cursor:pointer}.upload-label input{display:none}@media(max-width:760px){.publication-title,.publication-url{flex-direction:column}.version-table{min-width:850px}}</style>');
 let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},timelineCarrierId='',timelineStart=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="licenseButton" style="display:none" onclick="openLicense()">Licença</button>');
+document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="tvSimulatorButton" onclick="openTvSimulator()">Simular TV / PIDs</button>');
 const fmt=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'--:--';
 function toast(message,error=false){el('toast').innerHTML=`<div class="toast ${error?'error-text':''}">${esc(message)}</div>`;setTimeout(()=>el('toast').innerHTML='',3500)}
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt});const j=await r.json().catch(()=>({error:'Resposta inválida'}));if(!r.ok||j.error)throw Error(j.error||`HTTP ${r.status}`);return j}
-async function refresh(){try{const loaded=await Promise.all([api('/api/state'),api('/api/session')]);state=loaded[0];session=loaded[1];const valid=!!state.license?.valid,admin=session.user?.role==='admin';sources=valid?(await api('/api/sources')).sources:[];el('usersButton').style.display=admin?'':'none';el('licenseButton').style.display=admin?'':'none';el('restartAllButton').style.display=admin?'':'none';for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton'])el(id).disabled=!valid;el('timelineButton').disabled=!valid||!(state.carriers||[]).length;el('licenseAlert').hidden=valid;render();el('clock').textContent=`${session.user?.display_name||''} · ${new Date().toLocaleTimeString('pt-BR')}`}catch(e){toast(e.message,true)}}
+async function refresh(){try{const loaded=await Promise.all([api('/api/state'),api('/api/session')]);state=loaded[0];session=loaded[1];const valid=!!state.license?.valid,admin=session.user?.role==='admin';sources=valid?(await api('/api/sources')).sources:[];el('usersButton').style.display=admin?'':'none';el('licenseButton').style.display=admin?'':'none';el('restartAllButton').style.display=admin?'':'none';for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton','tvSimulatorButton'])el(id).disabled=!valid;el('timelineButton').disabled=!valid||!(state.carriers||[]).length;el('licenseAlert').hidden=valid;render();el('clock').textContent=`${session.user?.display_name||''} · ${new Date().toLocaleTimeString('pt-BR')}`}catch(e){toast(e.message,true)}}
 function render(){const cs=state.carriers||[],license=state.license||{};el('mCarriers').textContent=cs.length;el('mActive').textContent=cs.filter(c=>c.active).length;el('mServices').textContent=cs.reduce((n,c)=>n+c.services.length,0);el('mRestarts').textContent=cs.reduce((n,c)=>n+(c.restart_count||0),0);el('mLicense').textContent=license.valid?`${license.channel_count}/${license.max_channels}`:'Bloqueada';el('licenseReason').textContent=license.valid?'canais utilizados':license.reason||'Licença inválida';el('licenseMetric').className=`metric ${license.valid?'license-valid':'license-invalid'}`;el('carrierTable').innerHTML=cs.length?`<div class="table-wrap"><table class="carrier-table"><thead><tr><th>Portadora</th><th>Destino multicast</th><th>Canais</th><th>Estado</th><th class="actions-col">Ações</th></tr></thead><tbody>${cs.map(carrierRows).join('')}</tbody></table></div>`:'<div class="card empty"><h3>Nenhuma portadora cadastrada</h3><p>Cadastre a primeira portadora e associe os canais do XMLTV.</p></div>'}
 function utcOffsetLabel(minutes){const sign=minutes<0?'-':'+';const absolute=Math.abs(minutes);return `UTC${sign}${String(Math.floor(absolute/60)).padStart(2,'0')}:${String(absolute%60).padStart(2,'0')}`}
 function clockLabel(c){return c.clock_mode==='custom'?`${utcOffsetLabel(c.clock_utc_offset_minutes??-180)} · correção ${c.clock_correction_minutes>0?'+':''}${c.clock_correction_minutes||0} min`:'Padrão UTC-03:00'}
@@ -1735,6 +1798,9 @@ async function restartAllCarriers(){if(!confirm('Reiniciar agora todos os fluxos
 async function deleteCarrier(id){if(!confirm('Excluir esta portadora?'))return;try{await api('/api/carriers/delete',{method:'POST',body:JSON.stringify({id})});toast('Portadora excluída');refresh()}catch(e){toast(e.message,true)}}
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
 async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encodeURIComponent(id)}`);modal(`<h2>Logs do emissor</h2><pre style="background:#071b33;color:#dff4ff;padding:16px;border-radius:10px;max-height:65vh;overflow:auto;white-space:pre-wrap">${esc(j.log||'Sem logs.')}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true)}}
+function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
+async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
+function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do EPG Stream</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}
 async function saveLicenseKey(){try{const key=el('epgLicenseKey').value.trim();const result=await api('/api/license/key',{method:'POST',body:JSON.stringify({key})});state.license=result.license;closeModal();toast('Chave validada e instalada');refresh()}catch(e){toast(e.message,true)}}
 async function openUsers(){try{users=(await api('/api/users')).users;modal(`<div class="guide-head"><div><h2>Usuários do sistema</h2><div class="muted">Administradores gerenciam acessos; operadores trabalham com fontes e portadoras.</div></div><button class="primary" onclick="editUser()">+ Novo usuário</button></div><div class="guide-list">${users.map(u=>`<div class="guide-item"><div><span class="badge ${u.enabled?'running':'error'}">${u.enabled?'Ativo':'Desativado'}</span></div><div><strong>${esc(u.display_name)}</strong><div class="muted">${esc(u.username)} · ${u.role==='admin'?'Administrador':'Operador'}</div><div class="actions" style="margin-top:8px"><button onclick="editUser('${esc(u.id)}')">Editar / senha</button>${u.id!==session.user?.id?`<button class="danger" onclick="deleteUser('${esc(u.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`) }catch(e){toast(e.message,true)}}

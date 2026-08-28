@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada para a entrega: **1.12.2**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.13.0**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -44,6 +44,8 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.9.0 | fuso e correção de relógio configuráveis por portadora |
 | 1.10.0 | licenciamento online por canais e interface de logo temporariamente oculta |
 | 1.11.0 | gestão visual: Ver/Copiar chave v2 e instalação atômica no painel EPG |
+| 1.12.x | bloqueio integral sem licença, reinício global e correção da sinopse EIT |
+| 1.13.0 | simulador de receptor ISDB-TB com captura não intrusiva do TS gerado |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -873,7 +875,34 @@ Falha em teste impede release e implantação.
 
 Essas melhorias não devem introduzir processamento de vídeo/áudio.
 
-## 17. Limitações conhecidas
+## 17. Simulador de TV / PIDs
+
+Na barra superior, **Simular TV / PIDs** permite escolher uma portadora ativa e
+capturar oito segundos dos mesmos datagramas que o emissor envia ao socket
+multicast. A captura é uma cópia local: ela não abre outro receptor multicast,
+não altera o pacing e não interrompe o fluxo.
+
+Uso:
+
+1. inicie a portadora que deseja validar;
+2. clique em **Simular TV / PIDs**;
+3. escolha a portadora e clique em **Capturar e analisar**;
+4. confira CRC, continuidade, TSID, ONID, SIDs e a presença dos PIDs;
+5. em **Como a TV recebe os eventos**, compare o título, o texto curto `0x4D`,
+   a continuação `0x4E` e o texto final reconstruído.
+
+O recurso audita a saída do EPG Server, antes do Dexing. Para a saída RF ainda
+é necessário capturar o multiplex final. No Dexing, o mínimo para EPG/relógio é
+`0x0012 -> 0x0012` e `0x0014 -> 0x0014`; SDT/NIT/BIT/CDT dependem do desenho do
+multiplexador e dos recursos habilitados.
+
+Implementação: o painel grava `/data/diagnostics/<id>.request`; o emissor copia
+um número limitado de datagramas para `.ts.tmp` e publica `.ts` por rename
+atômico. O backend executa `/app/verify_isdbtb_ts.py` e devolve o relatório JSON.
+Sem licença, com a portadora parada ou fora da sessão autenticada, a ação é
+bloqueada.
+
+## 18. Limitações conhecidas
 
 - o painel usa HTTP Basic e não encerra TLS;
 - toda persistência fica em um JSON local, adequado ao appliance atual, mas não

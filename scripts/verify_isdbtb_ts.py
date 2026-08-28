@@ -175,6 +175,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
     content_nibbles = collections.Counter()
     synopsis_checks = 0
     repeated_synopsis_prefixes = 0
+    event_details = {}
     for pid, assembler in assemblers.items():
         for section in assembler.sections:
             table_id = section[0]
@@ -208,7 +209,10 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                         errors.append("EIT possui loop de descritores truncado")
                         break
                     short_text = b""
+                    event_title = b""
                     extended_parts = {}
+                    descriptor_tags = []
+                    event_categories = []
                     while descriptor_offset + 2 <= descriptor_end:
                         tag = section[descriptor_offset]
                         length = section[descriptor_offset + 1]
@@ -217,8 +221,10 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                             errors.append("EIT possui descritor truncado")
                             break
                         body = section[descriptor_offset + 2:body_end]
+                        descriptor_tags.append(tag)
                         if tag == 0x4D and len(body) >= 5:
                             name_length = body[3]
+                            event_title = body[4:4 + name_length]
                             text_length_offset = 4 + name_length
                             if text_length_offset < len(body):
                                 text_length = body[text_length_offset]
@@ -236,6 +242,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                         elif tag == 0x54:
                             for item in range(0, len(body) - 1, 2):
                                 content_nibbles[body[item]] += 1
+                                event_categories.append(body[item])
                         descriptor_offset = body_end
                     if extended_parts:
                         synopsis_checks += 1
@@ -247,6 +254,23 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                             errors.append(
                                 "EIT repete no 0x4E o prefixo já enviado no 0x4D "
                                 f"(SID {service}, event_id {event_id})")
+                    if table_id == 0x4E:
+                        event_id = (section[event_offset] << 8) | section[event_offset + 1]
+                        extended_text = b"".join(
+                            extended_parts[index] for index in sorted(extended_parts))
+                        event_details[(service, section_number, event_id)] = {
+                            "service_id": service, "section_number": section_number,
+                            "event_id": event_id,
+                            "title": event_title.decode("iso-8859-15", "replace"),
+                            "short_text_0x4d": short_text.decode("iso-8859-15", "replace"),
+                            "extended_text_0x4e": extended_text.decode("iso-8859-15", "replace"),
+                            "tv_text": (short_text + extended_text).decode(
+                                "iso-8859-15", "replace"),
+                            "descriptor_tags": [f"0x{tag:02X}" for tag in descriptor_tags],
+                            "content_categories_0x54": [
+                                f"0x{value:02X}" for value in event_categories],
+                            "running_status": (section[event_offset + 10] >> 5) & 0x07,
+                        }
                     event_offset = descriptor_end
             elif table_id == 0x00 and len(section) >= 12:
                 tsid = (section[3] << 8) | section[4]
@@ -450,6 +474,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         "content_categories": {f"0x{value:02X}": count for value, count in sorted(content_nibbles.items())},
         "synopsis_checks": synopsis_checks,
         "repeated_synopsis_prefixes": repeated_synopsis_prefixes,
+        "eit_present_following_events": list(event_details.values()),
         "continuity_errors": {f"0x{pid:04X}": count for pid, count in sorted(continuity_errors.items())},
         "errors": errors,
     }

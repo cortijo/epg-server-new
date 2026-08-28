@@ -116,7 +116,15 @@ IDs pelo código numérico do canal, descarta eventos sem duração e publica to
 as versões em uma única URL. A URL escolhe automaticamente a grade vigente e
 permanece igual nos próximos uploads; copie-a para **Fontes XMLTV**.
 
-## Estado conhecido da versão 1.10.0
+## Simulador de TV / PIDs (v1.13.0)
+
+Com uma portadora ativa, use **Simular TV / PIDs** na barra superior. O painel
+captura oito segundos dos datagramas gerados sem interromper o multicast e
+mostra PIDs, CRC, continuidade, identidades e os eventos EIT como o receptor os
+reconstrói a partir dos descritores `0x4D` e `0x4E`. O teste cobre a saída do EPG
+Server; a saída final do Dexing/RF continua exigindo captura no ponto final.
+
+## Estado conhecido da versão 1.13.0
 
 - EIT, TDT/TOT, SDT, BIT e CDT de logo são emitidos e possuem auditoria;
 - o logo usa descritor SDT `0xCF` e CDT `0xC8` no PID `0x0029`;

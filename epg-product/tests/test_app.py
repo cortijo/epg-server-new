@@ -370,7 +370,15 @@ class EpgProductTests(unittest.TestCase):
         for control in ["publicationsButton", "sourcesButton", "timelineButton",
                         "restartAllButton", "newCarrierButton"]:
             self.assertIn(control, INDEX_HTML)
-        self.assertIn("for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton'])el(id).disabled=!valid", INDEX_HTML)
+        self.assertIn("for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton','tvSimulatorButton'])el(id).disabled=!valid", INDEX_HTML)
+
+    def test_tv_simulator_ui_and_backend_are_wired(self):
+        self.assertIn("Simular TV / PIDs", INDEX_HTML)
+        self.assertIn("function openTvSimulator()", INDEX_HTML)
+        self.assertIn("/api/carriers/audit", INDEX_HTML)
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn('"EPG_DIAGNOSTIC_DIR": str(self.diagnostic_dir)', source)
+        self.assertIn("def audit(self, carrier_id", source)
         self.assertIn("const valid=!!state.license?.valid", INDEX_HTML)
         self.assertIn("disabled=state.license?.valid?'':' disabled'", INDEX_HTML)
         source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")

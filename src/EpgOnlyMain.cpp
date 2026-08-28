@@ -7,6 +7,7 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -669,8 +670,32 @@ int main() {
             std::size_t activeSectionRemaining = 0;
             std::uint64_t nextDeadline = monotonicNanoseconds();
             auto nextAuditLog = std::chrono::steady_clock::now();
+            const std::string diagnosticDirectory = environment("EPG_DIAGNOSTIC_DIR");
+            const std::string diagnosticBase = diagnosticDirectory.empty()
+                ? std::string() : diagnosticDirectory + "/" + config.streamId;
+            std::ofstream diagnosticStream;
+            std::uint64_t diagnosticDatagramsRemaining = 0;
+            auto nextDiagnosticPoll = std::chrono::steady_clock::now();
 
             while (!gStopRequested) {
+                const auto loopNow = std::chrono::steady_clock::now();
+                if (!diagnosticBase.empty() && !diagnosticStream.is_open() &&
+                    loopNow >= nextDiagnosticPoll) {
+                    const std::string requestPath = diagnosticBase + ".request";
+                    std::ifstream request(requestPath);
+                    unsigned seconds = 0;
+                    if (request >> seconds) {
+                        seconds = std::clamp(seconds, 1U, 10U);
+                        std::remove(requestPath.c_str());
+                        diagnosticStream.open(diagnosticBase + ".ts.tmp",
+                            std::ios::binary | std::ios::trunc);
+                        if (diagnosticStream) {
+                            diagnosticDatagramsRemaining = std::max<std::uint64_t>(
+                                1, (bitrate * seconds) / (8ULL * kDatagramSize));
+                        }
+                    }
+                    nextDiagnosticPoll = loopNow + std::chrono::milliseconds(250);
+                }
                 for (std::size_t slot = 0; slot < kPacketsPerDatagram; ++slot) {
                     std::array<std::uint8_t, kTsPacketSize> packet {};
                     const std::uint64_t slotTime = nextDeadline +
@@ -693,6 +718,22 @@ int main() {
                               << (error ? error.message() : "short datagram") << std::endl;
                     result = 1;
                     break;
+                }
+                if (diagnosticStream.is_open()) {
+                    diagnosticStream.write(
+                        reinterpret_cast<const char*>(datagram.data()), datagram.size());
+                    if (--diagnosticDatagramsRemaining == 0) {
+                        diagnosticStream.close();
+                        const std::string temporaryPath = diagnosticBase + ".ts.tmp";
+                        const std::string finalPath = diagnosticBase + ".ts";
+                        std::remove(finalPath.c_str());
+                        if (std::rename(temporaryPath.c_str(), finalPath.c_str()) != 0) {
+                            std::cerr << "EPG diagnostic sample publish failed" << std::endl;
+                        } else {
+                            std::cerr << "EPG diagnostic sample ready: " << finalPath
+                                      << std::endl;
+                        }
+                    }
                 }
 
                 nextDeadline += datagramIntervalNanoseconds;
