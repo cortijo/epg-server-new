@@ -124,7 +124,11 @@ mostra PIDs, CRC, continuidade, identidades e os eventos EIT como o receptor os
 reconstrói a partir dos descritores `0x4D` e `0x4E`. O teste cobre a saída do EPG
 Server; a saída final do Dexing/RF continua exigindo captura no ponto final.
 
-## Estado conhecido da versão 1.13.0
+Na v1.13.1, o perfil ISDB-TB envia no descritor `0x4D` apenas idioma e título
+do evento. A sinopse completa fica no `0x4E`; múltiplos descritores são unidos
+pela numeração, sem inserir espaço ou quebra de linha.
+
+## Estado conhecido da versão 1.13.1
 
 - EIT, TDT/TOT, SDT, BIT e CDT de logo são emitidos e possuem auditoria;
 - o logo usa descritor SDT `0xCF` e CDT `0xC8` no PID `0x0029`;

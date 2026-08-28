@@ -276,9 +276,9 @@ void appendExtendedEventDescriptors(std::vector<std::uint8_t>& descriptors,
     const std::size_t chunks = std::min<std::size_t>(13,
         (remaining + kChunkSize - 1) / kChunkSize);
     for (std::size_t index = 0; index < chunks; ++index) {
-        // The short_event_descriptor already carries the prefix. Extended
-        // descriptors must continue after it; repeating from byte zero makes
-        // receivers that concatenate 0x4D + 0x4E show the synopsis twice.
+        // Extended descriptors carry the synopsis bytes that are not present
+        // in the short_event_descriptor. In ISDB-TB, shortTextLength is zero:
+        // 0x4D carries only the event name and 0x4E carries the full synopsis.
         const std::size_t offset = shortTextLength + index * kChunkSize;
         const std::size_t length = std::min(kChunkSize, text.size() - offset);
         descriptors.push_back(0x4E);
@@ -311,7 +311,7 @@ std::vector<std::uint8_t> eventBytes(const Programme& event, EpgProfile profile,
         ? encodeIso885915(sourceTitle, 120)
         : truncateUtf8(sourceTitle, 120);
     const std::string description = profile == EpgProfile::IsdbTb
-        ? encodeIso885915(event.description, 110)
+        ? std::string()
         : truncateUtf8(event.description, 110);
     std::vector<std::uint8_t> descriptor;
     descriptor.push_back(0x4D);
@@ -323,7 +323,7 @@ std::vector<std::uint8_t> eventBytes(const Programme& event, EpgProfile profile,
     descriptor.insert(descriptor.end(), description.begin(), description.end());
 
     if (profile == EpgProfile::IsdbTb) {
-        appendExtendedEventDescriptors(descriptor, event, description.size());
+        appendExtendedEventDescriptors(descriptor, event, 0);
         for (const auto& category : event.categories) {
             const std::uint8_t content = contentNibbleForCategory(category);
             if (content == 0) continue;

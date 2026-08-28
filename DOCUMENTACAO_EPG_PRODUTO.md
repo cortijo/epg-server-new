@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada para a entrega: **1.13.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.13.1**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -46,6 +46,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.11.0 | gestão visual: Ver/Copiar chave v2 e instalação atômica no painel EPG |
 | 1.12.x | bloqueio integral sem licença, reinício global e correção da sinopse EIT |
 | 1.13.0 | simulador de receptor ISDB-TB com captura não intrusiva do TS gerado |
+| 1.13.1 | `0x4D` leva somente o título e `0x4E` leva toda a sinopse no perfil ISDB-TB |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -930,6 +931,6 @@ Para um novo agente:
 Em caso de divergência com notas históricas, confira primeiro
 `PRODUCT_VERSION`, a tag Git, a imagem ativa e o schema persistido. Corrija a
 documentação no mesmo commit da mudança que causou a divergência.
-> Na v1.12.2, descrições longas usam os primeiros 110 bytes no descritor EIT
-> `0x4D` e somente a continuação nos descritores `0x4E`. O auditor de TS acusa
-> qualquer regressão que volte a repetir o prefixo.
+> Na v1.13.1, o descritor EIT `0x4D` mantém idioma e título, com texto curto
+> vazio. A sinopse completa é enviada exclusivamente nos descritores `0x4E`,
+> numerados em ordem e sem quebra ou separador artificial.

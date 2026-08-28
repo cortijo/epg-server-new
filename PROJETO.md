@@ -48,8 +48,8 @@ o candidato e a produção estejam na mesma versão.
 ### 2.1 Git e código local
 
 - commit de implementação da v1.12: `e7896bc`;
-- tag prevista para o estado final documentado: `epg-v1.13.0`;
-- `PRODUCT_VERSION`: `1.13.0`;
+- tag prevista para o estado final documentado: `epg-v1.13.1`;
+- `PRODUCT_VERSION`: `1.13.1`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
@@ -68,16 +68,17 @@ git remote -v
 ### 2.2 Produção ativa
 
 Em 28/08/2026 os hosts `181.233.106.46` e `187.19.16.59` foram atualizados
-para `epgserver:v1.13.0-20260828`. Além da correção de sinopse da v1.12.2, a
-versão oferece o simulador de TV/PIDs. A validação real capturou 5.313 pacotes
-em cada host, com `0x0012`, `0x0014`, CRC, continuidade e reconstrução EIT
-aprovados, preservando 27 emissores no host principal e cinco no cliente.
+para `epgserver:v1.13.1-20260828`. A versão mantém o simulador de TV/PIDs e
+separa os metadados: `0x4D` leva idioma/título com texto curto vazio e `0x4E`
+leva a sinopse integral. A validação real capturou 5.313 pacotes em cada host,
+com CRC zero, títulos e sinopses aprovados, preservando 27 emissores no host
+principal e cinco no cliente.
 
 Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.13.0-20260828` |
+| EPG | `epg-stream`, imagem `epgserver:v1.13.1-20260828` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |
@@ -88,7 +89,7 @@ Host operacional conhecido: `181.233.106.46`.
 | Emissores | 27 processos `TVStreamEpgOnly` |
 | Canais licenciados | 63 de 80; o mesmo limite já constava no backup pré-corte |
 | Reinícios dos containers ativos | zero |
-| Rollback EPG imediato | `epg-stream-pre-v1.13.0-20260828-101644` |
+| Rollback EPG imediato | `epg-stream-pre-v1.13.1-20260828-104324` |
 | Rollback licenças imediato | `epg-license-server-pre-v1.1.0-20260827-073708` |
 | Backup EPG | `/srv/epg-stream-backup-pre-v1.12.0-20260827-081608` |
 | Backup autoridade | `epg-license-data-backup-pre-v1.1.0-20260827-073708` |
@@ -101,9 +102,9 @@ também possui **Reiniciar todos os fluxos**. A autoridade permanece na v1.1 e a
 licença ativa continua em `key_version=2`.
 
 Uma instalação cliente adicional em `187.19.16.59` foi promovida em 28/08/2026
-para `epgserver:v1.13.0-20260828`. Ela valida automaticamente a licença a cada
+para `epgserver:v1.13.1-20260828`. Ela valida automaticamente a licença a cada
 43200 segundos, opera com cinco portadoras/dez canais e preserva rollback em
-`epg-stream-pre-v1.13.0-20260828-102020`. A v1.12.1 também garante uma primeira
+`epg-stream-pre-v1.13.1-20260828-104421`. A v1.12.1 também garante uma primeira
 consulta real mesmo quando o uptime do host ainda é menor que o intervalo.
 
 ### 2.3 Candidato validado e isolado
@@ -679,6 +680,7 @@ tail -n 200 /srv/epg-stream/logs/ID_DA_PORTADORA.log
 | 1.12.1 | validação automática padrão a cada 12 horas e correção do primeiro check vazio |
 | 1.12.2 | elimina repetição entre os descritores EIT `0x4D` e `0x4E` e adiciona auditoria de sobreposição |
 | 1.13.0 | simulador de TV/PIDs captura o TS gerado sem interromper o multicast e reconstrói os metadados EIT |
+| 1.13.1 | separa título no `0x4D` e sinopse integral no `0x4E` para evitar quebra criada pelo receptor |
 
 As specs em `specs/` contêm o histórico detalhado de decisões e evidências.
 

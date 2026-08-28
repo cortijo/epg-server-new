@@ -386,6 +386,13 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('elif path == "/api/carriers/restart-all":', source)
         self.assertIn("self._require_license()", source)
 
+    def test_isdbtb_keeps_title_in_0x4d_and_synopsis_in_0x4e(self):
+        source = (Path(__file__).resolve().parents[2] / "src" / "EpgInjector.cpp").read_text(
+            encoding="utf-8")
+        self.assertIn("profile == EpgProfile::IsdbTb\n        ? std::string()", source)
+        self.assertIn("appendExtendedEventDescriptors(descriptor, event, 0);", source)
+        self.assertIn("descriptor.push_back(0x4D);", source)
+
     def test_restart_all_only_restarts_eligible_flows(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / "epg-product.json")
