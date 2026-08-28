@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada para a entrega: **1.12.1**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.12.2**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -901,3 +901,6 @@ Para um novo agente:
 Em caso de divergência com notas históricas, confira primeiro
 `PRODUCT_VERSION`, a tag Git, a imagem ativa e o schema persistido. Corrija a
 documentação no mesmo commit da mudança que causou a divergência.
+> Na v1.12.2, descrições longas usam os primeiros 110 bytes no descritor EIT
+> `0x4D` e somente a continuação nos descritores `0x4E`. O auditor de TS acusa
+> qualquer regressão que volte a repetir o prefixo.

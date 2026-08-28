@@ -34,7 +34,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.12.1"
+PRODUCT_VERSION = "1.12.2"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",

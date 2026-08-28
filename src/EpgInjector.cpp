@@ -265,14 +265,21 @@ int parentalAge(const std::string& rating) {
 }
 
 void appendExtendedEventDescriptors(std::vector<std::uint8_t>& descriptors,
-                                    const Programme& event) {
-    const std::string text = encodeIso885915(event.description, 13 * 249);
-    if (text.size() <= 110) return;
+                                    const Programme& event,
+                                    std::size_t shortTextLength) {
     constexpr std::size_t kChunkSize = 249;
+    constexpr std::size_t kMaxChunks = 13;
+    const std::string text = encodeIso885915(
+        event.description, shortTextLength + kMaxChunks * kChunkSize);
+    if (text.size() <= shortTextLength) return;
+    const std::size_t remaining = text.size() - shortTextLength;
     const std::size_t chunks = std::min<std::size_t>(13,
-        (text.size() + kChunkSize - 1) / kChunkSize);
+        (remaining + kChunkSize - 1) / kChunkSize);
     for (std::size_t index = 0; index < chunks; ++index) {
-        const std::size_t offset = index * kChunkSize;
+        // The short_event_descriptor already carries the prefix. Extended
+        // descriptors must continue after it; repeating from byte zero makes
+        // receivers that concatenate 0x4D + 0x4E show the synopsis twice.
+        const std::size_t offset = shortTextLength + index * kChunkSize;
         const std::size_t length = std::min(kChunkSize, text.size() - offset);
         descriptors.push_back(0x4E);
         descriptors.push_back(static_cast<std::uint8_t>(6 + length));
@@ -316,7 +323,7 @@ std::vector<std::uint8_t> eventBytes(const Programme& event, EpgProfile profile,
     descriptor.insert(descriptor.end(), description.begin(), description.end());
 
     if (profile == EpgProfile::IsdbTb) {
-        appendExtendedEventDescriptors(descriptor, event);
+        appendExtendedEventDescriptors(descriptor, event, description.size());
         for (const auto& category : event.categories) {
             const std::uint8_t content = contentNibbleForCategory(category);
             if (content == 0) continue;

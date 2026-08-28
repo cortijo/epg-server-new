@@ -173,6 +173,8 @@ def validate(path, expected_services, expected_tsid, expected_onid,
     bit_broadcasters = []
     bit_announced_tables = set()
     content_nibbles = collections.Counter()
+    synopsis_checks = 0
+    repeated_synopsis_prefixes = 0
     for pid, assembler in assemblers.items():
         for section in assembler.sections:
             table_id = section[0]
@@ -205,6 +207,8 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                     if descriptor_end > len(section) - 4:
                         errors.append("EIT possui loop de descritores truncado")
                         break
+                    short_text = b""
+                    extended_parts = {}
                     while descriptor_offset + 2 <= descriptor_end:
                         tag = section[descriptor_offset]
                         length = section[descriptor_offset + 1]
@@ -212,11 +216,37 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                         if body_end > descriptor_end:
                             errors.append("EIT possui descritor truncado")
                             break
-                        if tag == 0x54:
-                            body = section[descriptor_offset + 2:body_end]
+                        body = section[descriptor_offset + 2:body_end]
+                        if tag == 0x4D and len(body) >= 5:
+                            name_length = body[3]
+                            text_length_offset = 4 + name_length
+                            if text_length_offset < len(body):
+                                text_length = body[text_length_offset]
+                                text_start = text_length_offset + 1
+                                short_text = body[text_start:text_start + text_length]
+                        elif tag == 0x4E and len(body) >= 6:
+                            descriptor_number = body[0] >> 4
+                            items_length = body[4]
+                            text_length_offset = 5 + items_length
+                            if text_length_offset < len(body):
+                                text_length = body[text_length_offset]
+                                text_start = text_length_offset + 1
+                                extended_parts[descriptor_number] = body[
+                                    text_start:text_start + text_length]
+                        elif tag == 0x54:
                             for item in range(0, len(body) - 1, 2):
                                 content_nibbles[body[item]] += 1
                         descriptor_offset = body_end
+                    if extended_parts:
+                        synopsis_checks += 1
+                        extended_text = b"".join(
+                            extended_parts[index] for index in sorted(extended_parts))
+                        if short_text and extended_text.startswith(short_text):
+                            repeated_synopsis_prefixes += 1
+                            event_id = (section[event_offset] << 8) | section[event_offset + 1]
+                            errors.append(
+                                "EIT repete no 0x4E o prefixo já enviado no 0x4D "
+                                f"(SID {service}, event_id {event_id})")
                     event_offset = descriptor_end
             elif table_id == 0x00 and len(section) >= 12:
                 tsid = (section[3] << 8) | section[4]
@@ -418,6 +448,8 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         "bit_broadcasters": bit_broadcasters,
         "bit_announced_tables": [f"0x{table:02X}" for table in sorted(bit_announced_tables)],
         "content_categories": {f"0x{value:02X}": count for value, count in sorted(content_nibbles.items())},
+        "synopsis_checks": synopsis_checks,
+        "repeated_synopsis_prefixes": repeated_synopsis_prefixes,
         "continuity_errors": {f"0x{pid:04X}": count for pid, count in sorted(continuity_errors.items())},
         "errors": errors,
     }

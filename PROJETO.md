@@ -3,7 +3,7 @@
 > Documento canônico de entrada do projeto. Leia este arquivo inteiro antes de
 > diagnosticar, editar, implantar ou responder sobre o sistema.
 >
-> Última consolidação: **27/08/2026**.
+> Última consolidação: **28/08/2026**.
 
 ## 1. Resumo executivo
 
@@ -48,8 +48,8 @@ o candidato e a produção estejam na mesma versão.
 ### 2.1 Git e código local
 
 - commit de implementação da v1.12: `e7896bc`;
-- tag prevista para o estado final documentado: `epg-v1.12.1`;
-- `PRODUCT_VERSION`: `1.12.1`;
+- tag prevista para o estado final documentado: `epg-v1.12.2`;
+- `PRODUCT_VERSION`: `1.12.2`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
@@ -67,11 +67,17 @@ git remote -v
 
 ### 2.2 Produção ativa
 
+Em 28/08/2026 os hosts `181.233.106.46` e `187.19.16.59` foram atualizados
+para `epgserver:v1.12.2-20260828`. A versão corrige a repetição da sinopse ao
+fazer o `extended_event_descriptor` continuar depois dos 110 bytes já enviados
+no `short_event_descriptor`. Uma captura real da portadora ESPN confirmou 338
+sinopses longas sem sobreposição, CRC e continuidade sem erros.
+
 Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.12.0-20260827` |
+| EPG | `epg-stream`, imagem `epgserver:v1.12.2-20260828` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |
@@ -82,7 +88,7 @@ Host operacional conhecido: `181.233.106.46`.
 | Emissores | 27 processos `TVStreamEpgOnly` |
 | Canais licenciados | 63 de 80; o mesmo limite já constava no backup pré-corte |
 | Reinícios dos containers ativos | zero |
-| Rollback EPG imediato | `epg-stream-pre-v1.12.0-20260827-081608` |
+| Rollback EPG imediato | `epg-stream-pre-v1.12.2-20260828-093817` |
 | Rollback licenças imediato | `epg-license-server-pre-v1.1.0-20260827-073708` |
 | Backup EPG | `/srv/epg-stream-backup-pre-v1.12.0-20260827-081608` |
 | Backup autoridade | `epg-license-data-backup-pre-v1.1.0-20260827-073708` |
@@ -94,10 +100,10 @@ retornarem HTTP 402. Após revalidação, os fluxos elegíveis retomam. O painel
 também possui **Reiniciar todos os fluxos**. A autoridade permanece na v1.1 e a
 licença ativa continua em `key_version=2`.
 
-Uma instalação cliente adicional em `187.19.16.59` foi promovida em 27/08/2026
-para `epgserver:v1.12.1-20260827`. Ela valida automaticamente a licença a cada
+Uma instalação cliente adicional em `187.19.16.59` foi promovida em 28/08/2026
+para `epgserver:v1.12.2-20260828`. Ela valida automaticamente a licença a cada
 43200 segundos, opera com cinco portadoras/dez canais e preserva rollback em
-`epg-stream-pre-v1.12.1-20260827`. A v1.12.1 também garante uma primeira
+`epg-stream-pre-v1.12.2-20260828-093757`. A v1.12.1 também garante uma primeira
 consulta real mesmo quando o uptime do host ainda é menor que o intervalo.
 
 ### 2.3 Candidato validado e isolado
@@ -671,6 +677,7 @@ tail -n 200 /srv/epg-stream/logs/ID_DA_PORTADORA.log
 | 1.11.0 | Ver/Copiar chave v2 e instalação visual no EPG; deploy em 27/08/2026 |
 | 1.12.0 | bloqueio integral sem licença e reinício global; deploy em 27/08/2026 |
 | 1.12.1 | validação automática padrão a cada 12 horas e correção do primeiro check vazio |
+| 1.12.2 | elimina repetição entre os descritores EIT `0x4D` e `0x4E` e adiciona auditoria de sobreposição |
 
 As specs em `specs/` contêm o histórico detalhado de decisões e evidências.
 
