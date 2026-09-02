@@ -180,6 +180,17 @@ nunca são aceitos do navegador.
 
 ## 4. XMLTV e programação em tempo real
 
+Desde a v1.14.1, uma fonte pode usar o tipo **Parse-XML**, destinado a
+operadoras que entregam raiz `<tv>` e elementos `<programme>`, porém omitem
+`<channel>`, timezone ou incluem eventos sem duração. O processo baixa a
+origem, sintetiza canais válidos, aplica `-0300` quando não existe offset,
+remove eventos inválidos, valida a grade integral e só então substitui o cache.
+
+O emissor recebe uma URL interna estável e tokenizada e mantém seu ciclo normal
+de atualização a cada três horas. Se a operadora falhar, a última cópia válida
+permanece ativa. A URL original não aparece em `/api/state` e o token interno
+não aparece em `/api/state` nem em `/api/sources`.
+
 O cache aceita HTTP/HTTPS e detecta gzip pela extensão ou magic bytes. O limite
 é 96 MiB após descompressão, o timeout é 30 segundos e o cache vale 300
 segundos. O XML usa parsing

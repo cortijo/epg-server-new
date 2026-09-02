@@ -35,13 +35,14 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.14.0"
+PRODUCT_VERSION = "1.14.1"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",
     "url": "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml",
+    "source_type": "xmltv",
     "is_default": True,
 }
 MAX_BODY = 3 * 1024 * 1024
@@ -229,7 +230,7 @@ def element_text(element: ET.Element | None, fallback: str = "") -> str:
     return " ".join("".join(element.itertext()).split()) or fallback
 
 
-def parse_xmltv(payload: bytes) -> dict[str, Any]:
+def parse_xmltv(payload: bytes, bounded: bool = True) -> dict[str, Any]:
     """Parse channels and a bounded programme window without retaining the XML tree."""
     channels: dict[str, dict[str, str]] = {}
     programmes: dict[str, list[dict[str, Any]]] = {}
@@ -257,7 +258,7 @@ def parse_xmltv(payload: bytes) -> dict[str, Any]:
             except ValueError:
                 element.clear()
                 continue
-            if channel_id and stop > minimum and start < maximum and stop > start:
+            if channel_id and stop > start and (not bounded or (stop > minimum and start < maximum)):
                 item = {
                     "channel_id": channel_id,
                     "start": int(start.timestamp()),
@@ -342,6 +343,7 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
             continue
         stats["programmes_original"] += 1
         channel_id = (child.get("channel") or "").strip()
+        missing_channel = False
         if channel_id not in declared:
             candidates = prefix_candidates.get(_numeric_channel_prefix(channel_id), set())
             if len(candidates) == 1:
@@ -351,7 +353,7 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
                     channel_id = replacement
                     stats["channel_refs_rewritten"] += 1
             elif channel_id:
-                unresolved.add(channel_id)
+                missing_channel = True
         try:
             start_text, start_added = _normalized_xmltv_time(child.get("start") or "")
             stop_text, stop_added = _normalized_xmltv_time(child.get("stop") or "")
@@ -368,6 +370,8 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
         child.set("stop", stop_text)
         stats["timezone_added"] += int(start_added) + int(stop_added)
         stats["programmes"] += 1
+        if missing_channel:
+            unresolved.add(channel_id)
         valid_moments.extend((start, stop))
 
     # C++ requires a matching <channel> declaration. Preserve otherwise valid
@@ -393,7 +397,7 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
     normalized = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     if len(normalized) > MAX_XMLTV:
         raise ApiError("O XMLTV normalizado excede o limite de 96 MiB")
-    parsed = parse_xmltv(normalized)
+    parsed = parse_xmltv(normalized, bounded=False)
     parsed_count = sum(map(len, parsed["programmes"].values()))
     if parsed_count != stats["programmes"]:
         raise ApiError("A validação do XMLTV normalizado encontrou divergência na programação")
@@ -415,12 +419,21 @@ def select_publication_version(versions: list[dict[str, Any]], at: int | None = 
 
 
 def validate_source(source: dict[str, Any]) -> dict[str, Any]:
+    source_type = str(source.get("source_type") or "xmltv").strip().lower()
+    if source_type not in {"xmltv", "parse_xml"}:
+        raise ApiError("Tipo de fonte inválido")
     result = {
         "id": str(source.get("id") or slug_id("source")),
         "name": str(source.get("name") or "").strip(),
         "url": str(source.get("url") or "").strip(),
+        "source_type": source_type,
         "is_default": bool(source.get("is_default", False)),
     }
+    if source_type == "parse_xml":
+        token = str(source.get("parse_token") or uuid.uuid4().hex).strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{32}", token):
+            raise ApiError("Token interno Parse-XML inválido")
+        result["parse_token"] = token
     if not result["name"]:
         raise ApiError("Informe o nome da fonte XMLTV")
     parsed = urllib.parse.urlparse(result["url"])
@@ -669,6 +682,11 @@ class Store:
                 "xmltv_publications": loaded.get("xmltv_publications")
                 if isinstance(loaded.get("xmltv_publications"), list) else [],
             }
+            for source in self.data["sources"]:
+                source.setdefault("source_type", "xmltv")
+                if source["source_type"] == "parse_xml" and not re.fullmatch(
+                        r"[a-f0-9]{32}", str(source.get("parse_token") or "")):
+                    source["parse_token"] = uuid.uuid4().hex
             self.save()
 
     def save(self) -> None:
@@ -688,9 +706,45 @@ class Store:
 
 
 class GuideCache:
-    def __init__(self):
+    def __init__(self, cache_dir: Path | None = None):
         self.lock = threading.RLock()
         self.entries: dict[str, dict[str, Any]] = {}
+        self.cache_dir = cache_dir
+        if cache_dir:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _parse_cache_path(self, source: dict[str, Any]) -> Path | None:
+        token = str(source.get("parse_token") or "")
+        if not self.cache_dir or source.get("source_type") != "parse_xml" or not re.fullmatch(
+                r"[a-f0-9]{32}", token):
+            return None
+        return self.cache_dir / f"{token}.xml"
+
+    def _persist_normalized(self, source: dict[str, Any], payload: bytes) -> None:
+        path = self._parse_cache_path(source)
+        if not path:
+            return
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_bytes(payload)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+
+    def _load_persisted(self, source: dict[str, Any]) -> dict[str, Any] | None:
+        path = self._parse_cache_path(source)
+        if not path or not path.is_file() or path.stat().st_size > MAX_XMLTV:
+            return None
+        payload = path.read_bytes()
+        parsed = parse_xmltv(payload)
+        parsed.update({
+            "fetched_at": path.stat().st_mtime, "bytes": len(payload),
+            "source_id": source["id"], "normalized_payload": payload,
+            "normalization": {
+                "channels": len(parsed["channels"]),
+                "programmes": sum(map(len, parsed["programmes"].values())),
+                "persisted_fallback": True,
+            },
+        })
+        return parsed
 
     @staticmethod
     def download(url: str) -> bytes:
@@ -719,9 +773,26 @@ class GuideCache:
             cached = self.entries.get(source_id)
             if cached and not force and time.time() - cached["fetched_at"] < GUIDE_CACHE_SECONDS:
                 return cached
-        payload = self.download(source["url"])
-        parsed = parse_xmltv(payload)
-        parsed.update({"fetched_at": time.time(), "bytes": len(payload), "source_id": source_id})
+        try:
+            payload = self.download(source["url"])
+            stats = None
+            if source.get("source_type", "xmltv") == "parse_xml":
+                payload, stats = normalize_uploaded_xmltv(payload)
+            parsed = parse_xmltv(payload)
+            parsed.update({"fetched_at": time.time(), "bytes": len(payload), "source_id": source_id})
+            if stats is not None:
+                parsed.update({"normalized_payload": payload, "normalization": stats})
+                self._persist_normalized(source, payload)
+        except Exception:
+            # Never replace a previously validated guide with a broken refresh.
+            if cached:
+                return cached
+            persisted = self._load_persisted(source)
+            if persisted:
+                with self.lock:
+                    self.entries[source_id] = persisted
+                return persisted
+            raise
         with self.lock:
             self.entries[source_id] = parsed
         return parsed
@@ -729,6 +800,16 @@ class GuideCache:
     def invalidate(self, source_id: str) -> None:
         with self.lock:
             self.entries.pop(source_id, None)
+
+
+def runtime_source_url(source: dict[str, Any]) -> str:
+    if source.get("source_type", "xmltv") != "parse_xml":
+        return source["url"]
+    token = str(source.get("parse_token") or "")
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        raise ApiError("A fonte Parse-XML não possui token interno válido")
+    port = int(os.environ.get("EPG_HTTP_PORT", "9100"))
+    return f"http://127.0.0.1:{port}/parsed-xml/{token}.xml"
 
 
 class Supervisor:
@@ -774,13 +855,13 @@ class Supervisor:
             service_source = source_by_id.get(service.get("source_id") or carrier["source_id"])
             if not service_source:
                 raise ApiError(f"A fonte XMLTV do canal {service['name']} não existe")
-            resolved["source_url"] = service_source["url"]
+            resolved["source_url"] = runtime_source_url(service_source)
             services.append(resolved)
         environment = os.environ.copy()
         environment.update({
             "EPG_STREAM_ID": carrier["id"],
             "EPG_STREAM_NAME": carrier["name"],
-            "EPG_SOURCE_URL": source["url"],
+            "EPG_SOURCE_URL": runtime_source_url(source),
             "EPG_SERVICES_JSON": json.dumps(services, ensure_ascii=False, separators=(",", ":")),
             "EPG_TSID": str(carrier["transport_stream_id"]),
             "EPG_ONID": str(carrier["original_network_id"]),
@@ -1020,7 +1101,7 @@ class Application:
         )
         self._bootstrap_user(bootstrap_user, bootstrap_password)
         self._migrate_logos()
-        self.guides = GuideCache()
+        self.guides = GuideCache(data_dir / "parsed-xml-cache")
         self.supervisor = Supervisor(self.store, binary, data_dir / "logs", self.license)
         self.supervisor.start()
 
@@ -1213,6 +1294,12 @@ class Application:
         return source
 
     def save_source(self, request: dict[str, Any]) -> dict[str, Any]:
+        request = copy.deepcopy(request)
+        requested_id = str(request.get("id") or "")
+        previous = next((item for item in self.store.snapshot()["sources"]
+                         if item["id"] == requested_id), None)
+        if previous and previous.get("parse_token"):
+            request["parse_token"] = previous["parse_token"]
         source = validate_source(request)
         with self.store.lock:
             items = self.store.data["sources"]
@@ -1242,6 +1329,19 @@ class Application:
             if uses_source and carrier["id"] in running:
                 self.supervisor.action(carrier["id"], "restart")
         return {"result": "ok", "id": source["id"]}
+
+    def parsed_source_payload(self, token: str) -> tuple[bytes, dict[str, Any]]:
+        source = next((item for item in self.store.snapshot()["sources"]
+                       if item.get("source_type") == "parse_xml"
+                       and hmac.compare_digest(str(item.get("parse_token") or ""), token)), None)
+        if not source:
+            raise ApiError("Fonte Parse-XML não encontrada", HTTPStatus.NOT_FOUND)
+        guide = self.guides.get(source)
+        payload = guide.get("normalized_payload")
+        if not isinstance(payload, bytes):
+            raise ApiError("A fonte Parse-XML ainda não possui conteúdo válido",
+                           HTTPStatus.SERVICE_UNAVAILABLE)
+        return payload, guide.get("normalization") or {}
 
     def delete_source(self, source_id: str) -> dict[str, Any]:
         with self.store.lock:
@@ -1691,6 +1791,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(payload)
                 return
+            parsed_match = re.fullmatch(r"/parsed-xml/([a-f0-9]{32})\.xml", path)
+            if parsed_match:
+                payload, stats = APP.parsed_source_payload(parsed_match.group(1))
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, max-age=0, must-revalidate")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-XMLTV-Normalized", "parse-xml")
+                self.send_header("X-XMLTV-Channels", str(stats.get("channels", 0)))
+                self.send_header("X-XMLTV-Programmes", str(stats.get("programmes", 0)))
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             if not self._require_auth():
                 return
             if path == "/":
@@ -1705,7 +1819,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(payload)
             elif path == "/api/state":
                 state = APP.supervisor.state()
-                state["sources"] = [{key: value for key, value in source.items() if key != "url"} for source in APP.store.snapshot()["sources"]]
+                state["sources"] = [{key: value for key, value in source.items()
+                                     if key not in {"url", "parse_token"}}
+                                    for source in APP.store.snapshot()["sources"]]
                 self._json(state)
             elif path == "/api/session":
                 self._json({"user": self.current_user})
@@ -1719,7 +1835,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(update_information(APP.store.path.parent))
             elif path == "/api/sources":
                 self._require_license()
-                self._json({"sources": APP.store.snapshot()["sources"]})
+                self._json({"sources": [
+                    {key: value for key, value in source.items() if key != "parse_token"}
+                    for source in APP.store.snapshot()["sources"]
+                ]})
             elif path == "/api/publications":
                 self._require_license()
                 self._json({"publications": APP.publications()})
@@ -1798,6 +1917,8 @@ class Handler(BaseHTTPRequestHandler):
                 source = validate_source(request)
                 guide = APP.guides.get(source, force=True)
                 result = {"result": "ok", "channels": len(guide["channels"]), "programmes": sum(map(len, guide["programmes"].values())), "bytes": guide["bytes"]}
+                if guide.get("normalization"):
+                    result["normalization"] = guide["normalization"]
             elif path == "/api/sources/delete":
                 self._require_license()
                 result = APP.delete_source(str(request.get("id") or ""))
@@ -1899,7 +2020,7 @@ async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encode
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
 async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
 function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
-function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.14.0</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
+function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.14.1</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
 async function checkUpdate(){const info=el('updateInfo');if(info)info.textContent='Consultando a release oficial…';try{const u=await api('/api/update');const mode=u.install_mode==='native'?'Pacote nativo':'Docker';const last=u.last_update?.message?`<p class="muted">Última tentativa: ${esc(u.last_update.message)}</p>`:'';const action=u.update_available&&u.asset_available&&u.install_mode==='native'?`<button class="primary" onclick="applyUpdate('${esc(u.tag)}')">Atualizar agora para ${esc(u.latest_version)}</button>`:'';const docker=u.install_mode!=='native'&&u.update_available?'<p class="muted">Esta instalação usa Docker. Atualize a imagem pelo host para preservar volumes e rollback.</p>':'';info.innerHTML=`<p><b>Instalação:</b> ${mode}</p><p><b>Versão instalada:</b> ${esc(u.current_version)}</p><p><b>Última release:</b> ${esc(u.latest_version)}</p><p>${u.update_available?'Existe uma atualização disponível.':'O sistema está atualizado.'}</p>${docker}${last}${action}`}catch(e){if(info)info.innerHTML=`<span class="error-text">${esc(e.message)}</span>`}}
 async function applyUpdate(tag){if(!confirm(`Atualizar o EPG Stream para ${tag}? Os serviços serão reiniciados durante a instalação.`))return;try{const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({tag})});toast(r.message||'Atualização solicitada');const info=el('updateInfo');if(info)info.innerHTML='<b>Atualização agendada.</b><p class="muted">O serviço será reiniciado após validar e instalar o pacote. Reabra o painel em alguns instantes.</p>'}catch(e){toast(e.message,true)}}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do EPG Stream</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}
@@ -1919,11 +2040,13 @@ async function uploadPublication(id,input){const file=input.files?.[0];if(!file)
 async function copyPublicationUrl(id){const input=el(`publicationUrl-${id}`);try{await navigator.clipboard.writeText(input.value);toast('URL permanente copiada')}catch(e){input.select();document.execCommand('copy');toast('URL permanente copiada')}}
 async function deletePublicationVersion(publicationId,versionId){if(!confirm('Excluir esta versão do XMLTV? A URL poderá selecionar outro arquivo.'))return;try{await api('/api/publications/version/delete',{method:'POST',body:JSON.stringify({publication_id:publicationId,version_id:versionId})});toast('Versão excluída');openPublications()}catch(e){toast(e.message,true)}}
 async function deletePublication(id){if(!confirm('Excluir a publicação, todos os arquivos e sua URL permanente?'))return;try{await api('/api/publications/delete',{method:'POST',body:JSON.stringify({id})});toast('Publicação excluída');openPublications()}catch(e){toast(e.message,true)}}
-function openSources(){modal(`<div class="guide-head"><h2>Fontes XMLTV</h2><div class="actions"><button onclick="editSource()">+ Nova fonte</button><button onclick="closeModal()">Fechar</button></div></div><div class="guide-list">${sources.map(s=>`<div class="guide-item"><div><b>${s.is_default?'PADRÃO':'XMLTV'}</b></div><div><strong>${esc(s.name)}</strong><div class="muted">${esc(s.url)}</div><div class="actions" style="margin-top:8px"><button onclick="editSource('${esc(s.id)}')">Editar</button><button onclick="testSource('${esc(s.id)}')">Testar</button>${sources.length>1?`<button class="danger" onclick="deleteSource('${esc(s.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div>`)}
-function editSource(id=''){const s=sources.find(x=>x.id===id)||{};modal(`<h2>${id?'Editar':'Nova'} fonte XMLTV</h2><div class="form-grid"><input id="srcId" type="hidden" value="${esc(s.id||'')}"><label class="wide">Nome<input id="srcName" value="${esc(s.name||'')}"></label><label class="wide">URL HTTP/HTTPS<input id="srcUrl" value="${esc(s.url||'')}"></label><label><span>Fonte padrão</span><select id="srcDefault"><option value="0">Não</option><option value="1" ${s.is_default?'selected':''}>Sim</option></select></label></div><div class="modal-actions"><button onclick="openSources()">Voltar</button><button onclick="testSourceForm()">Testar</button><button class="primary" onclick="saveSource()">Salvar</button></div>`)}
-async function saveSource(){try{await api('/api/sources',{method:'POST',body:JSON.stringify({id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,is_default:el('srcDefault').value==='1'})});await refresh();openSources();toast('Fonte salva')}catch(e){toast(e.message,true)}}
-async function testSourceForm(){try{const r=await api('/api/sources/test',{method:'POST',body:JSON.stringify({id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value})});toast(`${r.channels} canais e ${r.programmes} programas encontrados`)}catch(e){toast(e.message,true)}}
-async function testSource(id){const s=sources.find(x=>x.id===id);try{const r=await api('/api/sources/test',{method:'POST',body:JSON.stringify(s)});toast(`${r.channels} canais e ${r.programmes} programas encontrados`)}catch(e){toast(e.message,true)}}
+function openSources(){modal(`<div class="guide-head"><h2>Fontes XMLTV</h2><div class="actions"><button onclick="editSource()">+ Nova fonte</button><button onclick="closeModal()">Fechar</button></div></div><div class="guide-list">${sources.map(s=>`<div class="guide-item"><div><b>${s.source_type==='parse_xml'?'PARSE-XML':s.is_default?'PADRÃO':'XMLTV'}</b></div><div><strong>${esc(s.name)}</strong><div class="muted">${esc(s.url)}</div><div class="actions" style="margin-top:8px"><button onclick="editSource('${esc(s.id)}')">Editar</button><button onclick="testSource('${esc(s.id)}')">Testar</button>${sources.length>1?`<button class="danger" onclick="deleteSource('${esc(s.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div>`)}
+function editSource(id=''){const s=sources.find(x=>x.id===id)||{};modal(`<h2>${id?'Editar':'Nova'} fonte XMLTV</h2><div class="form-grid"><input id="srcId" type="hidden" value="${esc(s.id||'')}"><label class="wide">Nome<input id="srcName" value="${esc(s.name||'')}"></label><label>Tipo de entrada<select id="srcType" onchange="sourceTypeChanged()"><option value="xmltv" ${(s.source_type||'xmltv')==='xmltv'?'selected':''}>XMLTV padrão</option><option value="parse_xml" ${s.source_type==='parse_xml'?'selected':''}>Parse-XML (normalizar provedor)</option></select></label><label><span>Fonte padrão</span><select id="srcDefault"><option value="0">Não</option><option value="1" ${s.is_default?'selected':''}>Sim</option></select></label><label class="wide">URL HTTP/HTTPS<input id="srcUrl" value="${esc(s.url||'')}"></label><div id="srcTypeHelp" class="muted wide"></div></div><div class="modal-actions"><button onclick="openSources()">Voltar</button><button onclick="testSourceForm()">Testar</button><button class="primary" onclick="saveSource()">Salvar</button></div>`);sourceTypeChanged()}
+function sourceTypeChanged(){const help=el('srcTypeHelp');if(help)help.textContent=el('srcType').value==='parse_xml'?'Cria canais ausentes, aplica UTC-03:00, remove eventos inválidos e entrega uma URL interna estável ao emissor.':'Usa o XMLTV original sem transformação estrutural.'}
+async function saveSource(){try{await api('/api/sources',{method:'POST',body:JSON.stringify({id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,source_type:el('srcType').value,is_default:el('srcDefault').value==='1'})});await refresh();openSources();toast('Fonte salva')}catch(e){toast(e.message,true)}}
+function sourceTestMessage(r){const n=r.normalization;if(!n)return `${r.channels} canais e ${r.programmes} programas encontrados`;return `${r.channels} canais e ${r.programmes} programas na janela · ${n.channels_synthesized||0} canais criados · ${n.invalid_programmes_removed||0} eventos inválidos removidos`}
+async function testSourceForm(){try{const r=await api('/api/sources/test',{method:'POST',body:JSON.stringify({id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,source_type:el('srcType').value})});toast(sourceTestMessage(r))}catch(e){toast(e.message,true)}}
+async function testSource(id){const s=sources.find(x=>x.id===id);try{const r=await api('/api/sources/test',{method:'POST',body:JSON.stringify(s)});toast(sourceTestMessage(r))}catch(e){toast(e.message,true)}}
 async function deleteSource(id){if(!confirm('Excluir esta fonte?'))return;try{await api('/api/sources/delete',{method:'POST',body:JSON.stringify({id})});await refresh();openSources()}catch(e){toast(e.message,true)}}
 refresh();setInterval(refresh,15000);
 </script></body></html>'''

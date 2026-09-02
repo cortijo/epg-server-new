@@ -9,14 +9,77 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (
-    ApiError, Application, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
+    ApiError, Application, GuideCache, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
-    parse_update_release, select_publication_version, validate_carrier,
+    parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
+    validate_source,
 )
 from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_parse_xml_normalizes_provider_without_channel_declarations(self):
+        now = datetime.now(timezone.utc)
+        current_start = now.strftime("%Y%m%d%H%M%S")
+        current_stop = (now + timedelta(hours=1)).strftime("%Y%m%d%H%M%S")
+        distant_start = (now + timedelta(days=20)).strftime("%Y%m%d%H%M%S")
+        distant_stop = (now + timedelta(days=20, hours=1)).strftime("%Y%m%d%H%M%S")
+        payload = f'''<tv>
+          <programme channel="0071 CANAL" start="{current_start}" stop="{current_stop}"><title>Atual</title><desc>Sinopse</desc></programme>
+          <programme channel="0071 CANAL" start="{distant_start}" stop="{distant_stop}"><title>Futuro</title><desc>Sinopse</desc></programme>
+          <programme channel="0043 OUTRO" start="{current_start}" stop="{current_start}"><title>Inválido</title></programme>
+        </tv>'''.encode()
+        normalized, stats = normalize_uploaded_xmltv(payload)
+        full = parse_xmltv(normalized, bounded=False)
+        self.assertEqual(stats["channels_synthesized"], 1)
+        self.assertEqual(stats["invalid_programmes_removed"], 1)
+        self.assertEqual(stats["programmes"], 2)
+        self.assertEqual(len(full["channels"]), 1)
+        self.assertEqual(sum(map(len, full["programmes"].values())), 2)
+        self.assertIn(b" -0300", normalized)
+
+    def test_parse_xml_cache_keeps_last_valid_normalization(self):
+        source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
+                                  "source_type": "parse_xml"})
+        payload = b'''<tv><programme channel="0001 TESTE" start="20260902000000" stop="20260903000000"><title>Grade</title></programme></tv>'''
+        cache = GuideCache()
+        with mock.patch.object(cache, "download", return_value=payload):
+            first = cache.get(source, force=True)
+        self.assertIn("normalized_payload", first)
+        self.assertEqual(first["normalization"]["channels_synthesized"], 1)
+        with mock.patch.object(cache, "download", side_effect=OSError("offline")):
+            second = cache.get(source, force=True)
+        self.assertIs(second, first)
+
+    def test_parse_xml_cache_survives_application_restart(self):
+        source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
+                                  "source_type": "parse_xml"})
+        payload = b'''<tv><programme channel="0001 TESTE" start="20260902000000" stop="20260903000000"><title>Grade</title></programme></tv>'''
+        with tempfile.TemporaryDirectory() as directory:
+            first_cache = GuideCache(Path(directory))
+            with mock.patch.object(first_cache, "download", return_value=payload):
+                first_cache.get(source, force=True)
+            second_cache = GuideCache(Path(directory))
+            with mock.patch.object(second_cache, "download", side_effect=OSError("offline")):
+                restored = second_cache.get(source, force=True)
+            self.assertTrue(restored["normalization"]["persisted_fallback"])
+            self.assertEqual(len(restored["channels"]), 1)
+
+    def test_parse_xml_runtime_url_is_internal_and_token_is_not_in_apis(self):
+        source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
+                                  "source_type": "parse_xml"})
+        with mock.patch.dict("os.environ", {"EPG_HTTP_PORT": "9100"}):
+            self.assertEqual(runtime_source_url(source),
+                             f"http://127.0.0.1:9100/parsed-xml/{source['parse_token']}.xml")
+        application_source = (Path(__file__).resolve().parents[1] / "app.py").read_text(
+            encoding="utf-8")
+        self.assertIn('if key != "parse_token"', application_source)
+        self.assertIn('if key not in {"url", "parse_token"}', application_source)
+
+    def test_parse_xml_source_type_is_available_in_ui(self):
+        self.assertIn("Parse-XML (normalizar provedor)", INDEX_HTML)
+        self.assertIn("sourceTestMessage", INDEX_HTML)
+
     def test_about_and_update_ui_are_available(self):
         self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)
         self.assertIn("Developed by Julio Cortijo", INDEX_HTML)

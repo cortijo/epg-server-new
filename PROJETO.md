@@ -48,8 +48,8 @@ o candidato e a produção estejam na mesma versão.
 ### 2.1 Git e código local
 
 - base anterior: `3b349e7` (pacote nativo v1.13.1);
-- tag prevista para o estado final documentado: `epg-native-v1.14.0-1`;
-- `PRODUCT_VERSION`: `1.14.0`;
+- tag prevista para o estado final documentado: `epg-v1.14.1`;
+- `PRODUCT_VERSION`: `1.14.1`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
@@ -281,6 +281,11 @@ Restrições importantes:
 O sistema aceita XMLTV HTTP/HTTPS e `.gz`. BrazilTVEPG é criado como fonte
 padrão, mas outras fontes podem ser cadastradas. Cada canal pode escolher sua
 própria fonte.
+
+O tipo `parse_xml`, introduzido na v1.14.1, normaliza feeds de operadora que
+omitem canais/timezone ou contêm eventos inválidos e os entrega ao emissor por
+uma URL interna tokenizada. Fontes anteriores continuam implicitamente como
+`xmltv`, sem transformação.
 
 O ID do evento precisa coincidir com `epg_channel_id`. Nome visual semelhante
 não realiza associação.
