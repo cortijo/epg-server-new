@@ -6,5 +6,6 @@ epg-product/.env
 data/
 backups/
 build/
+dist/
 .vscode/
 .idea/

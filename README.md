@@ -148,3 +148,16 @@ pela numeração, sem inserir espaço ou quebra de linha.
 
 Nunca envie ao Git informações persistidas em `/srv/epg-stream`, arquivos
 `.env`, URLs XMLTV privadas, credenciais, logs ou capturas de produção.
+
+## Instalação nativa no Ubuntu 24.04+
+
+Além da imagem Docker, o produto pode ser compilado como pacote Debian nativo:
+
+```bash
+./packaging/debian/build-deb.sh
+sudo apt install ./dist/epg-stream_1.13.1-1_amd64.deb
+sudo epg-stream-configure
+```
+
+O pacote suporta build nativo `amd64` e `arm64`, instala um serviço systemd e
+não modifica o firewall. Consulte `packaging/debian/README.md` antes de usar.

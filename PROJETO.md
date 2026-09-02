@@ -184,6 +184,7 @@ Corrija a documentação no mesmo commit que corrige a divergência.
 | `src/EpgInjector.cpp` | XMLTV, EIT, categorias, TDT/TOT e descritores |
 | `src/ConfigManager.*` | configuração compartilhada do núcleo C++ |
 | `scripts/install.sh` | instalação/upgrade interativo do EPG |
+| `packaging/debian/` | construção e configuração do pacote nativo Ubuntu 24.04+ |
 | `scripts/firewall-manager.sh` | firewall nftables declarativo e separado |
 | `scripts/verify_isdbtb_ts.py` | auditoria offline do MPEG-TS ISDB-TB |
 | `scripts/verify_epg_clock.py` | auditoria de EIT/TDT/TOT e fuso |

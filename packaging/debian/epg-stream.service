@@ -1,0 +1,26 @@
+[Unit]
+Description=EPG Stream ISDB-TB
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=epgstream
+Group=epgstream
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/epg-stream/epg-stream.env
+ExecStart=/usr/bin/python3 /usr/lib/epg-stream/app.py
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/epg-stream
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

@@ -903,7 +903,29 @@ atômico. O backend executa `/app/verify_isdbtb_ts.py` e devolve o relatório JS
 Sem licença, com a portadora parada ou fora da sessão autenticada, a ação é
 bloqueada.
 
-## 18. Limitações conhecidas
+## 18. Distribuição nativa Ubuntu 24.04+
+
+O diretório `packaging/debian` gera um pacote `.deb` sem dependência do Docker.
+A aplicação continua composta pelo painel Python e pelo emissor C++, executados
+pelo unit `epg-stream.service` como usuário sem login `epgstream`.
+
+```bash
+sudo apt update
+sudo apt install -y build-essential dpkg-dev pkg-config \
+  libboost-system-dev libboost-thread-dev libcurl4-openssl-dev libjsoncpp-dev
+./packaging/debian/build-deb.sh
+sudo apt install ./dist/epg-stream_1.13.1-1_amd64.deb
+sudo epg-stream-configure
+```
+
+O configurador copia a chave com grupo restrito, cria a configuração, inicia o
+serviço e remove usuário/senha de bootstrap do EnvironmentFile após o primeiro
+health. Dados ficam em `/var/lib/epg-stream`, configuração em
+`/etc/epg-stream` e aplicação em `/usr/lib/epg-stream`. Upgrade e remoção não
+apagam dados. O pacote não altera firewall e não substitui uma implantação
+Docker existente automaticamente.
+
+## 19. Limitações conhecidas
 
 - o painel usa HTTP Basic e não encerra TLS;
 - toda persistência fica em um JSON local, adequado ao appliance atual, mas não
@@ -917,7 +939,7 @@ bloqueada.
 - o modo genérico do TVStream e o produto EPG compartilham código C++ crítico;
   qualquer mudança nesse núcleo exige regressão nos dois produtos.
 
-## 18. Ordem de leitura e fonte de verdade
+## 20. Ordem de leitura e fonte de verdade
 
 Para um novo agente:
 

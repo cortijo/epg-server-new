@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+getent group epgstream >/dev/null 2>&1 || addgroup --system --quiet epgstream
+getent passwd epgstream >/dev/null 2>&1 || adduser --system --quiet --ingroup epgstream --home /var/lib/epg-stream --no-create-home --disabled-login epgstream
+install -d -o epgstream -g epgstream -m 0750 /var/lib/epg-stream
+chown root:epgstream /etc/epg-stream
+chmod 0750 /etc/epg-stream
+chmod 0640 /etc/epg-stream/epg-stream.env
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl enable epg-stream.service >/dev/null 2>&1 || true
+if [ "$1" = configure ]; then systemctl try-restart epg-stream.service >/dev/null 2>&1 || true; fi
+exit 0

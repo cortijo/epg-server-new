@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ "${EUID}" -eq 0 ]] || { echo "Execute com sudo." >&2; exit 1; }
+ENV_FILE=/etc/epg-stream/epg-stream.env
+DATA_FILE=/var/lib/epg-stream/epg-product.json
+KEY_FILE=/etc/epg-stream/license.key
+
+ask() {
+  local variable="$1" label="$2" default="$3" value
+  read -r -p "$label [$default]: " value
+  printf -v "$variable" '%s' "${value:-$default}"
+}
+
+replace_env() {
+  local key="$1" value="$2" temporary escaped
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || { echo "Valor inválido para $key" >&2; exit 1; }
+  escaped="${value//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  value="\"$escaped\""
+  temporary="$(mktemp /etc/epg-stream/.env.XXXXXX)"
+  awk -v key="$key" -v value="$value" 'BEGIN{done=0} index($0,key"=")==1 {print key"="value; done=1; next} {print} END{if(!done) print key"="value}' "$ENV_FILE" >"$temporary"
+  chown root:epgstream "$temporary"
+  chmod 0640 "$temporary"
+  mv -f "$temporary" "$ENV_FILE"
+}
+
+ask HTTP_PORT "Porta HTTP" "9100"
+[[ "$HTTP_PORT" =~ ^[0-9]+$ ]] && ((HTTP_PORT >= 1 && HTTP_PORT <= 65535)) || { echo "Porta inválida." >&2; exit 1; }
+ask PUBLIC_URL "URL pública sem caminho (opcional)" ""
+[[ -z "$PUBLIC_URL" || "$PUBLIC_URL" =~ ^https?://[^/]+$ ]] || { echo "URL pública inválida." >&2; exit 1; }
+ask LICENSE_URL "URL do servidor de licenças" "http://127.0.0.1:9200"
+[[ "$LICENSE_URL" =~ ^https?://[^/]+$ ]] || { echo "URL de licença inválida." >&2; exit 1; }
+ask INSTALLATION_ID "Identificador estável desta instalação" "$(hostname)-epg"
+[[ "$INSTALLATION_ID" =~ ^[A-Za-z0-9._:-]{8,128}$ ]] || { echo "Identificador inválido." >&2; exit 1; }
+read -r -p "Caminho atual da chave de licença: " SOURCE_KEY
+[[ -f "$SOURCE_KEY" ]] || { echo "Chave não encontrada." >&2; exit 1; }
+
+replace_env EPG_HTTP_PORT "$HTTP_PORT"
+replace_env EPG_PUBLIC_BASE_URL "$PUBLIC_URL"
+replace_env EPG_LICENSE_SERVER_URL "$LICENSE_URL"
+replace_env EPG_LICENSE_INSTALLATION_ID "$INSTALLATION_ID"
+install -o root -g epgstream -m 0640 "$SOURCE_KEY" "$KEY_FILE"
+
+if [[ ! -f "$DATA_FILE" ]]; then
+  read -r -p "Usuário administrador inicial: " ADMIN_USER
+  [[ "$ADMIN_USER" =~ ^[A-Za-z0-9._@+-]{3,64}$ ]] || { echo "Usuário inválido." >&2; exit 1; }
+  read -r -s -p "Senha inicial (mínimo 10 caracteres): " ADMIN_PASSWORD; echo
+  [[ ${#ADMIN_PASSWORD} -ge 10 ]] || { echo "Senha muito curta." >&2; exit 1; }
+  replace_env EPG_ADMIN_USER "$ADMIN_USER"
+  replace_env EPG_ADMIN_PASSWORD "$ADMIN_PASSWORD"
+fi
+
+systemctl enable epg-stream.service >/dev/null
+systemctl restart epg-stream.service
+for _ in $(seq 1 30); do
+  if python3 - "$HTTP_PORT" <<'PY'
+import sys, urllib.request
+urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/health", timeout=2).read()
+PY
+  then
+    replace_env EPG_ADMIN_USER ""
+    replace_env EPG_ADMIN_PASSWORD ""
+    systemctl restart epg-stream.service
+    echo "EPG Stream configurado em http://$(hostname -I | awk '{print $1}'):$HTTP_PORT"
+    exit 0
+  fi
+  sleep 1
+done
+systemctl status epg-stream.service --no-pager || true
+echo "O serviço não respondeu ao health; credenciais de bootstrap foram mantidas para nova tentativa." >&2
+exit 1
