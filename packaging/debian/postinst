@@ -8,5 +8,6 @@ chmod 0750 /etc/epg-stream
 chmod 0640 /etc/epg-stream/epg-stream.env
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl enable epg-stream.service >/dev/null 2>&1 || true
+systemctl enable --now epg-stream-updater.path >/dev/null 2>&1 || true
 if [ "$1" = configure ]; then systemctl try-restart epg-stream.service >/dev/null 2>&1 || true; fi
 exit 0

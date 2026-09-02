@@ -20,7 +20,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     EPG_DATA_DIR=/data \
     EPG_HTTP_PORT=9100 \
-    EPG_EMITTER_BINARY=/app/TVStreamEpgOnly
+    EPG_EMITTER_BINARY=/app/TVStreamEpgOnly \
+    EPG_INSTALL_MODE=docker \
+    EPG_UPDATE_REPOSITORY=cortijo/epgserver2 \
+    EPG_UPDATE_TOKEN_FILE=/update/update.token
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates python3 python3-pil libboost-system1.83.0 libboost-thread1.83.0 \
     libcurl4t64 libjsoncpp25 \

@@ -12,6 +12,7 @@ import io
 import ipaddress
 import json
 import os
+import platform
 import re
 import signal
 import struct
@@ -34,7 +35,9 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.13.1"
+PRODUCT_VERSION = "1.14.0"
+PRODUCT_DEVELOPER = "Julio Cortijo"
+DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
     "name": "BrazilTVEPG (padrão)",
@@ -70,6 +73,95 @@ class ApiError(Exception):
 
 def now_epoch() -> int:
     return int(time.time())
+
+
+def version_tuple(value: str) -> tuple[int, int, int]:
+    match = re.search(r"(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:[^0-9]|$)", str(value))
+    if not match:
+        raise ApiError("A release não possui uma versão válida")
+    return tuple(int(part) for part in match.groups())
+
+
+def update_architecture() -> str:
+    architecture = platform.machine().lower()
+    return {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(
+        architecture, architecture
+    )
+
+
+def parse_update_release(payload: dict[str, Any], repository: str, architecture: str) -> dict[str, Any]:
+    tag = str(payload.get("tag_name") or "")
+    latest = ".".join(map(str, version_tuple(tag)))
+    suffix = f"_{architecture}.deb"
+    assets = [item for item in payload.get("assets", []) if isinstance(item, dict)]
+    asset = next((item for item in assets if str(item.get("name") or "").endswith(suffix)), None)
+    digest = str((asset or {}).get("digest") or "")
+    url = str((asset or {}).get("browser_download_url") or "")
+    if asset and (not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest) or not url.startswith("https://github.com/")):
+        raise ApiError("A release possui um pacote sem assinatura SHA-256 válida")
+    return {
+        "repository": repository, "tag": tag, "latest_version": latest,
+        "release_url": str(payload.get("html_url") or ""),
+        "asset_name": str((asset or {}).get("name") or ""),
+        "asset_available": bool(asset), "digest": digest.lower(),
+    }
+
+
+def update_information(data_dir: Path) -> dict[str, Any]:
+    repository = os.environ.get("EPG_UPDATE_REPOSITORY", DEFAULT_UPDATE_REPOSITORY).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ApiError("Repositório de atualização inválido")
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": f"EPGStream/{PRODUCT_VERSION}"}
+    token_path = Path(os.environ.get("EPG_UPDATE_TOKEN_FILE", ""))
+    if str(token_path) and token_path.is_file():
+        token = token_path.read_text(encoding="utf-8").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/releases/latest",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            raw = response.read(1024 * 1024 + 1)
+    except Exception as error:
+        raise ApiError(f"Não foi possível consultar atualizações: {error}", HTTPStatus.BAD_GATEWAY)
+    if len(raw) > 1024 * 1024:
+        raise ApiError("Resposta de atualização muito grande", HTTPStatus.BAD_GATEWAY)
+    try:
+        release = parse_update_release(json.loads(raw), repository, update_architecture())
+    except (json.JSONDecodeError, TypeError) as error:
+        raise ApiError(f"Resposta de atualização inválida: {error}", HTTPStatus.BAD_GATEWAY)
+    release.update({
+        "product": PRODUCT_NAME, "developer": PRODUCT_DEVELOPER,
+        "current_version": PRODUCT_VERSION,
+        "install_mode": os.environ.get("EPG_INSTALL_MODE", "docker").strip().lower() or "docker",
+        "update_available": version_tuple(release["latest_version"]) > version_tuple(PRODUCT_VERSION),
+    })
+    status_path = data_dir / "update-status.json"
+    if status_path.is_file():
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            release["last_update"] = {key: status.get(key) for key in ("status", "message", "tag", "updated_at")}
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+    return release
+
+
+def request_native_update(data_dir: Path, expected_tag: str) -> dict[str, Any]:
+    information = update_information(data_dir)
+    if information["install_mode"] != "native":
+        raise ApiError("No modo Docker, atualize a imagem pelo host", HTTPStatus.CONFLICT)
+    if not information["update_available"] or not information["asset_available"]:
+        raise ApiError("Não existe atualização nativa disponível", HTTPStatus.CONFLICT)
+    if expected_tag != information["tag"]:
+        raise ApiError("A release mudou; consulte novamente antes de atualizar", HTTPStatus.CONFLICT)
+    target = data_dir / "update-request.json"
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"tag": information["tag"], "requested_at": now_epoch()}), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    return {"result": "scheduled", "tag": information["tag"], "message": "Atualização solicitada"}
 
 
 def slug_id(prefix: str) -> str:
@@ -1622,6 +1714,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/users":
                 self._require_admin()
                 self._json({"users": APP.users()})
+            elif path == "/api/update":
+                self._require_admin()
+                self._json(update_information(APP.store.path.parent))
             elif path == "/api/sources":
                 self._require_license()
                 self._json({"sources": APP.store.snapshot()["sources"]})
@@ -1686,6 +1781,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/users":
                 self._require_admin()
                 result = APP.save_user(request)
+            elif path == "/api/update/apply":
+                self._require_admin()
+                result = request_native_update(APP.store.path.parent, str(request.get("tag") or ""))
             elif path == "/api/license/key":
                 self._require_admin()
                 result = APP.install_license_key(request)
@@ -1752,7 +1850,7 @@ INDEX_HTML = r'''<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>EPG Stream</title><style>
 :root{--navy:#071b33;--blue:#087ec1;--cyan:#1bb6e8;--bg:#f2f6fa;--card:#fff;--text:#14263a;--muted:#6d7c8d;--line:#dce6ef;--green:#19a974;--red:#df4c55;--amber:#d99a23}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,Segoe UI,Arial,sans-serif}.top{background:linear-gradient(120deg,var(--navy),#0b5689);color:#fff;padding:22px 30px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 8px 28px #071b3330}.brand{display:flex;gap:14px;align-items:center}.logo{width:46px;height:46px;border:2px solid #51c7ed;border-radius:14px;display:grid;place-items:center;font-size:23px;font-weight:800}.brand h1{margin:0;font-size:22px}.brand small{color:#bde8fa}.live{display:flex;gap:8px;align-items:center}.dot{width:9px;height:9px;background:#31dc9a;border-radius:50%;box-shadow:0 0 0 5px #31dc9a22}.wrap{max-width:1500px;margin:0 auto;padding:24px}.toolbar{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-bottom:18px}.toolbar h2{margin:0;font-size:20px}.actions{display:flex;gap:8px;flex-wrap:wrap}button{border:0;border-radius:9px;padding:10px 14px;font-weight:700;cursor:pointer;background:#e7eef5;color:var(--text)}button.primary{background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff}button.danger{color:var(--red)}button:disabled{opacity:.5;cursor:not-allowed}.summary{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:18px}.metric,.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #0b254012}.metric{padding:17px}.metric b{font-size:24px;display:block;margin-top:6px}.metric span{color:var(--muted);font-size:12px}.metric.license-valid{border-color:#8ce2bd}.metric.license-invalid{border-color:#f1a4aa}.muted{color:var(--muted)}.badge{font-size:11px;font-weight:800;text-transform:uppercase;border-radius:999px;padding:5px 8px;background:#eef2f6;white-space:nowrap}.badge.running{background:#dcf8ec;color:#087d56}.badge.error{background:#ffe4e5;color:#b72a34}.table-wrap{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #0b254012;overflow:auto}.carrier-table{width:100%;min-width:1050px;border-collapse:collapse}.carrier-table th{padding:12px 14px;background:#edf4fa;color:#526477;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em}.carrier-table td{padding:14px;border-top:1px solid var(--line);vertical-align:middle}.carrier-table tbody:first-child tr:first-child td{border-top:0}.carrier-table tr.main-row:hover td{background:#f8fbfd}.carrier-name{font-size:15px;font-weight:800}.carrier-sub{margin-top:4px;font-size:12px;color:var(--muted)}.actions-col{width:190px;position:sticky;right:0;background:#fff;box-shadow:-8px 0 14px -14px #071b33;z-index:1}.carrier-table th.actions-col{background:#edf4fa}.action-stack{display:grid;grid-template-columns:1fr 1fr;gap:6px}.action-stack button{padding:8px 9px;font-size:12px}.action-stack .wide{grid-column:1/-1}.program-row{display:none}.program-row.open{display:table-row}.program-row>td{padding:0;background:#f5f9fc}.program-panel{padding:18px 22px}.program-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.program-list{display:grid;gap:8px}.program-line{display:grid;grid-template-columns:1.1fr 80px 120px 2fr 2fr auto;gap:12px;align-items:center;padding:11px 12px;background:#fff;border:1px solid var(--line);border-radius:10px}.program-line button{padding:8px 10px}.program-now{font-weight:750}.progress{height:5px;background:#e6edf3;border-radius:9px;margin-top:6px;overflow:hidden}.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}.empty{padding:50px;text-align:center;color:var(--muted)}.modal-back{position:fixed;inset:0;background:#071b3399;display:grid;place-items:center;padding:20px;z-index:5}.modal{background:#fff;border-radius:16px;width:min(920px,100%);max-height:92vh;overflow:auto;padding:22px;box-shadow:0 24px 70px #0005}.modal h2{margin:0 0 18px}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}label{display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:12px}label.wide{grid-column:1/-1}input,select{width:100%;border:1px solid #cbd8e4;border-radius:8px;padding:10px;background:#fff;color:var(--text)}.service-edit{display:grid;grid-template-columns:1.2fr 1.5fr .6fr auto;gap:8px;margin:8px 0;align-items:end;padding:10px;background:#f5f8fb;border-radius:10px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.guide-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.guide-list{margin-top:14px;display:flex;flex-direction:column;gap:9px}.guide-item{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px}.guide-item.current{border-color:#23aee1;background:#edfaff}.toast{position:fixed;right:20px;bottom:20px;background:var(--navy);color:#fff;padding:13px 17px;border-radius:10px;z-index:9;box-shadow:0 10px 30px #0004}.error-text{color:var(--red)}@media(max-width:760px){.wrap{padding:14px}.summary{grid-template-columns:1fr 1fr}.form-grid{grid-template-columns:1fr}.service-edit{grid-template-columns:1fr}.top{padding:16px}.program-line{grid-template-columns:1fr 70px}.program-line .program-detail{grid-column:1/-1}.actions-col{position:static}.carrier-table{min-width:900px}}
-</style></head><body><header class="top"><div class="brand"><div class="logo">E</div><div><h1>EPG Stream</h1><small>Programação ISDB-TB em multicast</small></div></div><div class="live"><i class="dot"></i><span id="clock">Conectando</span></div></header><main class="wrap"><div id="licenseAlert" class="license-alert" hidden>Licença inválida, entre em contato com o suporte</div><div class="toolbar"><div><h2>Portadoras e programação</h2><div class="muted">Visualização compacta; expanda uma portadora para consultar a programação.</div></div><div class="actions"><button id="usersButton" style="display:none" onclick="openUsers()">Usuários</button><button id="publicationsButton" onclick="openPublications()">Publicações XMLTV</button><button id="sourcesButton" onclick="openSources()">Fontes XMLTV</button><button id="timelineButton" disabled onclick="openTimeline()">Grade de programação</button><button id="restartAllButton" style="display:none" onclick="restartAllCarriers()">Reiniciar todos os fluxos</button><button id="newCarrierButton" class="primary" onclick="openCarrier()">+ Nova portadora</button></div></div><section class="summary"><div class="metric"><span>PORTADORAS</span><b id="mCarriers">0</b></div><div class="metric"><span>EMISSORAS ATIVAS</span><b id="mActive">0</b></div><div class="metric"><span>CANAIS / SERVIÇOS</span><b id="mServices">0</b></div><div class="metric"><span>REINÍCIOS</span><b id="mRestarts">0</b></div><div id="licenseMetric" class="metric license-invalid"><span>LICENÇA</span><b id="mLicense">Verificando</b><small id="licenseReason" class="muted"></small></div></section><section id="carrierTable"></section></main><div id="overlay"></div><div id="toast"></div>
+</style></head><body><header class="top"><div class="brand"><div class="logo">E</div><div><h1>EPG Stream</h1><small>Programação ISDB-TB em multicast</small></div></div><div class="live"><i class="dot"></i><span id="clock">Conectando</span></div></header><main class="wrap"><div id="licenseAlert" class="license-alert" hidden>Licença inválida, entre em contato com o suporte</div><div class="toolbar"><div><h2>Portadoras e programação</h2><div class="muted">Visualização compacta; expanda uma portadora para consultar a programação.</div></div><div class="actions"><button onclick="openAbout()">Sobre</button><button id="usersButton" style="display:none" onclick="openUsers()">Usuários</button><button id="publicationsButton" onclick="openPublications()">Publicações XMLTV</button><button id="sourcesButton" onclick="openSources()">Fontes XMLTV</button><button id="timelineButton" disabled onclick="openTimeline()">Grade de programação</button><button id="restartAllButton" style="display:none" onclick="restartAllCarriers()">Reiniciar todos os fluxos</button><button id="newCarrierButton" class="primary" onclick="openCarrier()">+ Nova portadora</button></div></div><section class="summary"><div class="metric"><span>PORTADORAS</span><b id="mCarriers">0</b></div><div class="metric"><span>EMISSORAS ATIVAS</span><b id="mActive">0</b></div><div class="metric"><span>CANAIS / SERVIÇOS</span><b id="mServices">0</b></div><div class="metric"><span>REINÍCIOS</span><b id="mRestarts">0</b></div><div id="licenseMetric" class="metric license-invalid"><span>LICENÇA</span><b id="mLicense">Verificando</b><small id="licenseReason" class="muted"></small></div></section><section id="carrierTable"></section></main><div id="overlay"></div><div id="toast"></div>
 <script>
 document.head.insertAdjacentHTML('beforeend','<style>.license-alert{margin-bottom:18px;padding:14px 18px;border:1px solid #ef9da4;border-radius:11px;background:#fff0f1;color:#b4232d;font-weight:800;font-size:15px}.license-alert[hidden]{display:none}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.service-edit{grid-template-columns:1fr 1fr 1.25fr .42fr .9fr 1.1fr auto}.logo-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.logo-tools button{padding:8px}.logo-preview{width:64px;height:36px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px}.logo-status{font-size:11px;color:var(--muted)}@media(max-width:1100px){.service-edit{grid-template-columns:1fr 1fr}}</style>');
@@ -1801,6 +1899,9 @@ async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encode
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
 async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
 function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
+function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.14.0</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
+async function checkUpdate(){const info=el('updateInfo');if(info)info.textContent='Consultando a release oficial…';try{const u=await api('/api/update');const mode=u.install_mode==='native'?'Pacote nativo':'Docker';const last=u.last_update?.message?`<p class="muted">Última tentativa: ${esc(u.last_update.message)}</p>`:'';const action=u.update_available&&u.asset_available&&u.install_mode==='native'?`<button class="primary" onclick="applyUpdate('${esc(u.tag)}')">Atualizar agora para ${esc(u.latest_version)}</button>`:'';const docker=u.install_mode!=='native'&&u.update_available?'<p class="muted">Esta instalação usa Docker. Atualize a imagem pelo host para preservar volumes e rollback.</p>':'';info.innerHTML=`<p><b>Instalação:</b> ${mode}</p><p><b>Versão instalada:</b> ${esc(u.current_version)}</p><p><b>Última release:</b> ${esc(u.latest_version)}</p><p>${u.update_available?'Existe uma atualização disponível.':'O sistema está atualizado.'}</p>${docker}${last}${action}`}catch(e){if(info)info.innerHTML=`<span class="error-text">${esc(e.message)}</span>`}}
+async function applyUpdate(tag){if(!confirm(`Atualizar o EPG Stream para ${tag}? Os serviços serão reiniciados durante a instalação.`))return;try{const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({tag})});toast(r.message||'Atualização solicitada');const info=el('updateInfo');if(info)info.innerHTML='<b>Atualização agendada.</b><p class="muted">O serviço será reiniciado após validar e instalar o pacote. Reabra o painel em alguns instantes.</p>'}catch(e){toast(e.message,true)}}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do EPG Stream</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}
 async function saveLicenseKey(){try{const key=el('epgLicenseKey').value.trim();const result=await api('/api/license/key',{method:'POST',body:JSON.stringify({key})});state.license=result.license;closeModal();toast('Chave validada e instalada');refresh()}catch(e){toast(e.message,true)}}
 async function openUsers(){try{users=(await api('/api/users')).users;modal(`<div class="guide-head"><div><h2>Usuários do sistema</h2><div class="muted">Administradores gerenciam acessos; operadores trabalham com fontes e portadoras.</div></div><button class="primary" onclick="editUser()">+ Novo usuário</button></div><div class="guide-list">${users.map(u=>`<div class="guide-item"><div><span class="badge ${u.enabled?'running':'error'}">${u.enabled?'Ativo':'Desativado'}</span></div><div><strong>${esc(u.display_name)}</strong><div class="muted">${esc(u.username)} · ${u.role==='admin'?'Administrador':'Operador'}</div><div class="actions" style="margin-top:8px"><button onclick="editUser('${esc(u.id)}')">Editar / senha</button>${u.id!==session.user?.id?`<button class="danger" onclick="deleteUser('${esc(u.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`) }catch(e){toast(e.message,true)}}

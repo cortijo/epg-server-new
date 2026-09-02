@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="${EPG_PACKAGE_VERSION:-1.13.1}"
+VERSION="${EPG_PACKAGE_VERSION:-1.14.0}"
 REVISION="${EPG_PACKAGE_REVISION:-1}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
@@ -28,8 +28,11 @@ g++ -std=c++17 -O2 -DNDEBUG -pthread -I/usr/include/jsoncpp -I"$ROOT/src" \
 install -m 0755 "$ROOT/epg-product/app.py" "$STAGE/usr/lib/epg-stream/app.py"
 install -m 0644 "$ROOT/epg-product/license_client.py" "$STAGE/usr/lib/epg-stream/license_client.py"
 install -m 0755 "$ROOT/scripts/verify_isdbtb_ts.py" "$STAGE/usr/lib/epg-stream/verify_isdbtb_ts.py"
+install -m 0755 "$SCRIPT_DIR/epg-stream-updater.py" "$STAGE/usr/lib/epg-stream/epg-stream-updater.py"
 install -m 0755 "$SCRIPT_DIR/epg-stream-configure" "$STAGE/usr/sbin/epg-stream-configure"
 install -m 0644 "$SCRIPT_DIR/epg-stream.service" "$STAGE/lib/systemd/system/epg-stream.service"
+install -m 0644 "$SCRIPT_DIR/epg-stream-updater.service" "$STAGE/lib/systemd/system/epg-stream-updater.service"
+install -m 0644 "$SCRIPT_DIR/epg-stream-updater.path" "$STAGE/lib/systemd/system/epg-stream-updater.path"
 install -m 0640 "$SCRIPT_DIR/epg-stream.env" "$STAGE/etc/epg-stream/epg-stream.env"
 install -m 0755 "$SCRIPT_DIR/postinst" "$STAGE/DEBIAN/postinst"
 install -m 0755 "$SCRIPT_DIR/prerm" "$STAGE/DEBIAN/prerm"

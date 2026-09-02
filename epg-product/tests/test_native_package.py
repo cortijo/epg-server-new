@@ -28,6 +28,18 @@ class NativePackageTests(unittest.TestCase):
         self.assertIn("EPG_EMITTER_BINARY=/usr/lib/epg-stream/TVStreamEpgOnly", source)
         self.assertIn("EPG_AUDITOR_SCRIPT=/usr/lib/epg-stream/verify_isdbtb_ts.py", source)
         self.assertIn("EPG_LICENSE_CHECK_SECONDS=43200", source)
+        self.assertIn("EPG_INSTALL_MODE=native", source)
+
+    def test_privileged_updater_is_separated_and_digest_pinned(self):
+        updater = (PACKAGE / "epg-stream-updater.py").read_text(encoding="utf-8")
+        path_unit = (PACKAGE / "epg-stream-updater.path").read_text(encoding="utf-8")
+        build = (PACKAGE / "build-deb.sh").read_text(encoding="utf-8")
+        self.assertIn('re.fullmatch(r"sha256:', updater)
+        self.assertIn('["apt-get", "install", "-y", str(package)]', updater)
+        self.assertIn('fields[0] != "epg-stream"', updater)
+        self.assertNotIn("shell=True", updater)
+        self.assertIn("PathChanged=/var/lib/epg-stream/update-request.json", path_unit)
+        self.assertIn('epg-stream-updater.py"', build)
 
     def test_configurator_scrubs_bootstrap_password(self):
         source = (PACKAGE / "epg-stream-configure").read_text(encoding="utf-8")
@@ -36,6 +48,22 @@ class NativePackageTests(unittest.TestCase):
         self.assertIn("systemctl restart epg-stream.service", source)
         self.assertNotIn("ufw", source)
         self.assertNotIn("nft ", source)
+
+    def test_private_repository_token_is_stored_outside_environment(self):
+        source = (PACKAGE / "epg-stream-configure").read_text(encoding="utf-8")
+        environment = (PACKAGE / "epg-stream.env").read_text(encoding="utf-8")
+        updater = (PACKAGE / "epg-stream-updater.py").read_text(encoding="utf-8")
+        self.assertIn('read -r -s -p "Token GitHub somente leitura', source)
+        self.assertIn('chmod 0640 "$TOKEN_TEMP"', source)
+        self.assertIn('unset UPDATE_TOKEN', source)
+        self.assertIn("EPG_UPDATE_TOKEN_FILE=/etc/epg-stream/update.token", environment)
+        self.assertIn('headers["Authorization"] = f"Bearer {token}"', updater)
+
+    def test_smoke_test_fails_when_health_never_becomes_ready(self):
+        source = (PACKAGE / "smoke-test.sh").read_text(encoding="utf-8")
+        self.assertIn("ready=0", source)
+        self.assertIn("then ready=1; break", source)
+        self.assertIn('test "$ready" = 1', source)
 
 
 if __name__ == "__main__":

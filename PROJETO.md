@@ -40,21 +40,21 @@ O repositório oficial é `https://github.com/cortijo/epgserver.git`. A branch d
 trabalho e publicação é `main`. Tags Git e tags Docker são imutáveis; nunca use
 `latest` em produção.
 
-## 2. Estado real em 27/08/2026
+## 2. Estado real em 02/09/2026
 
 Esta seção deve ser atualizada em todo deploy. Não presuma que o código local,
 o candidato e a produção estejam na mesma versão.
 
 ### 2.1 Git e código local
 
-- commit de implementação da v1.12: `e7896bc`;
-- tag prevista para o estado final documentado: `epg-v1.13.1`;
-- `PRODUCT_VERSION`: `1.13.1`;
+- base anterior: `3b349e7` (pacote nativo v1.13.1);
+- tag prevista para o estado final documentado: `epg-native-v1.14.0-1`;
+- `PRODUCT_VERSION`: `1.14.0`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
-- a spec da entrega é
-  `specs/2026-08-27-bloqueio-licenca-reinicio-global.md`.
+- a spec da atualização atual é
+  `specs/2026-09-02-sobre-atualizacao-segura.md`.
 
 Nunca descarte o working tree. Antes de qualquer ação execute:
 
@@ -184,7 +184,7 @@ Corrija a documentação no mesmo commit que corrige a divergência.
 | `src/EpgInjector.cpp` | XMLTV, EIT, categorias, TDT/TOT e descritores |
 | `src/ConfigManager.*` | configuração compartilhada do núcleo C++ |
 | `scripts/install.sh` | instalação/upgrade interativo do EPG |
-| `packaging/debian/` | construção e configuração do pacote nativo Ubuntu 24.04+ |
+| `packaging/debian/` | pacote nativo, serviço systemd e atualizador validado Ubuntu 24.04+ |
 | `scripts/firewall-manager.sh` | firewall nftables declarativo e separado |
 | `scripts/verify_isdbtb_ts.py` | auditoria offline do MPEG-TS ISDB-TB |
 | `scripts/verify_epg_clock.py` | auditoria de EIT/TDT/TOT e fuso |

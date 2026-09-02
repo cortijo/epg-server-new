@@ -14,13 +14,13 @@ sudo apt install -y build-essential dpkg-dev pkg-config \
 ./packaging/debian/build-deb.sh
 ```
 
-O artefato é criado em `dist/epg-stream_1.13.1-1_ARCH.deb`. Compile uma vez em
+O artefato é criado em `dist/epg-stream_1.14.0-1_ARCH.deb`. Compile uma vez em
 `amd64` e outra em `arm64` para publicar as duas arquiteturas.
 
 ## Instalação no cliente
 
 ```bash
-sudo apt install ./epg-stream_1.13.1-1_amd64.deb
+sudo apt install ./epg-stream_1.14.0-1_amd64.deb
 sudo epg-stream-configure
 ```
 
@@ -28,6 +28,12 @@ O configurador solicita porta, URL pública opcional, servidor de licenças,
 identificador estável, arquivo da chave e, apenas em volume vazio, o primeiro
 administrador. Após o primeiro `/health`, a senha de bootstrap é removida de
 `/etc/epg-stream/epg-stream.env`.
+
+Se o repositório de releases for privado, informe no configurador um token
+GitHub fine-grained somente leitura, limitado ao repositório do produto e à
+permissão **Contents: read**. O token fica fora do painel, em
+`/etc/epg-stream/update.token`, com modo `0640` e grupo `epgstream`. Em
+repositório público, deixe esse campo vazio.
 
 ## Operação
 
@@ -44,6 +50,19 @@ Arquivos:
 - configuração e chave: `/etc/epg-stream`;
 - dados, logs, publicações e diagnósticos: `/var/lib/epg-stream`;
 - serviço: `/lib/systemd/system/epg-stream.service`.
+
+Administradores podem usar **Sobre > Verificar atualização**. O painel grava
+somente uma solicitação sem privilégios; `epg-stream-updater.path` aciona um
+serviço root separado, que consulta novamente a release oficial, valida
+arquitetura, nome, versão e SHA-256 antes de instalar. O resultado fica em
+`/var/lib/epg-stream/update-status.json`.
+
+```bash
+systemctl status epg-stream-updater.path
+journalctl -u epg-stream-updater.service
+```
+
+No Docker, o botão é somente informativo: a imagem deve ser atualizada no host.
 
 ## Atualização e remoção
 

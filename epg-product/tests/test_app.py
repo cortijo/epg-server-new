@@ -11,12 +11,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import (
     ApiError, Application, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
-    select_publication_version, validate_carrier,
+    parse_update_release, select_publication_version, validate_carrier,
 )
 from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_about_and_update_ui_are_available(self):
+        self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)
+        self.assertIn("Developed by Julio Cortijo", INDEX_HTML)
+        self.assertIn("async function checkUpdate()", INDEX_HTML)
+        self.assertIn("async function applyUpdate(tag)", INDEX_HTML)
+
+    def test_release_parser_requires_matching_deb_and_digest(self):
+        payload = {
+            "tag_name": "epg-native-v1.14.0-1",
+            "html_url": "https://github.com/cortijo/epgserver2/releases/tag/epg-native-v1.14.0-1",
+            "assets": [{
+                "name": "epg-stream_1.14.0-1_amd64.deb",
+                "browser_download_url": "https://github.com/cortijo/epgserver2/releases/download/tag/package.deb",
+                "digest": "sha256:" + "a" * 64,
+            }],
+        }
+        result = parse_update_release(payload, "cortijo/epgserver2", "amd64")
+        self.assertEqual(result["latest_version"], "1.14.0")
+        self.assertTrue(result["asset_available"])
+        payload["assets"][0]["digest"] = ""
+        with self.assertRaises(ApiError):
+            parse_update_release(payload, "cortijo/epgserver2", "amd64")
+
     def test_license_default_interval_is_12_hours_and_allows_long_overrides(self):
         manager = LicenseManager("http://license.test:9200", "license.key", "install-001")
         self.assertEqual(manager.check_seconds, 43200)

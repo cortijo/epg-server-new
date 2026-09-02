@@ -5,6 +5,7 @@ set -Eeuo pipefail
 ENV_FILE=/etc/epg-stream/epg-stream.env
 DATA_FILE=/var/lib/epg-stream/epg-product.json
 KEY_FILE=/etc/epg-stream/license.key
+UPDATE_TOKEN_FILE=/etc/epg-stream/update.token
 
 ask() {
   local variable="$1" label="$2" default="$3" value
@@ -41,6 +42,15 @@ replace_env EPG_PUBLIC_BASE_URL "$PUBLIC_URL"
 replace_env EPG_LICENSE_SERVER_URL "$LICENSE_URL"
 replace_env EPG_LICENSE_INSTALLATION_ID "$INSTALLATION_ID"
 install -o root -g epgstream -m 0640 "$SOURCE_KEY" "$KEY_FILE"
+read -r -s -p "Token GitHub somente leitura para repositório privado (opcional): " UPDATE_TOKEN; echo
+if [[ -n "$UPDATE_TOKEN" ]]; then
+  TOKEN_TEMP="$(mktemp /etc/epg-stream/.update-token.XXXXXX)"
+  printf '%s\n' "$UPDATE_TOKEN" >"$TOKEN_TEMP"
+  chown root:epgstream "$TOKEN_TEMP"
+  chmod 0640 "$TOKEN_TEMP"
+  mv -f "$TOKEN_TEMP" "$UPDATE_TOKEN_FILE"
+  unset UPDATE_TOKEN
+fi
 
 if [[ ! -f "$DATA_FILE" ]]; then
   read -r -p "Usuário administrador inicial: " ADMIN_USER

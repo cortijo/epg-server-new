@@ -925,6 +925,21 @@ health. Dados ficam em `/var/lib/epg-stream`, configuração em
 apagam dados. O pacote não altera firewall e não substitui uma implantação
 Docker existente automaticamente.
 
+Desde a v1.14, o botão **Sobre** exibe produto, versão e `Developed by Julio
+Cortijo`. Administradores podem consultar a última release oficial. Em uma
+instalação nativa, o botão de atualização cria uma solicitação atômica no
+diretório de dados. Um `systemd.path` inicia o atualizador root separado, que
+refaz a consulta ao GitHub, exige digest SHA-256, confere pacote, arquitetura e
+versão e só então chama o APT. O painel web nunca recebe root e nunca executa
+`sudo`. No Docker a tela apenas orienta atualizar a imagem pelo host, mantendo
+volumes, backup e rollback sob controle do operador.
+
+Para releases em repositório GitHub privado, `epg-stream-configure` recebe de
+forma silenciosa um token fine-grained com `Contents: read`, limitado ao
+repositório. Ele é armazenado exclusivamente em
+`/etc/epg-stream/update.token` (`root:epgstream`, modo `0640`) e não é exposto
+por API, painel ou arquivo de ambiente. Repositórios públicos não exigem token.
+
 ## 19. Limitações conhecidas
 
 - o painel usa HTTP Basic e não encerra TLS;

@@ -1,0 +1,15 @@
+[Unit]
+Description=Atualização validada do EPG Stream
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/epg-stream/epg-stream.env
+ExecStart=/usr/lib/epg-stream/epg-stream-updater.py
+User=root
+Group=root
+UMask=0027
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=false

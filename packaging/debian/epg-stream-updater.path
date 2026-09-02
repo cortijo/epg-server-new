@@ -1,0 +1,9 @@
+[Unit]
+Description=Observa solicitações de atualização do EPG Stream
+
+[Path]
+PathChanged=/var/lib/epg-stream/update-request.json
+Unit=epg-stream-updater.service
+
+[Install]
+WantedBy=multi-user.target
