@@ -3,7 +3,7 @@
 > Documento canônico de entrada do projeto. Leia este arquivo inteiro antes de
 > diagnosticar, editar, implantar ou responder sobre o sistema.
 >
-> Última consolidação: **28/08/2026**.
+> Última consolidação: **02/09/2026**.
 
 ## 1. Resumo executivo
 
@@ -47,14 +47,14 @@ o candidato e a produção estejam na mesma versão.
 
 ### 2.1 Git e código local
 
-- base anterior: `3b349e7` (pacote nativo v1.13.1);
+- implementação Parse-XML: `b4001f5`;
 - tag prevista para o estado final documentado: `epg-v1.14.1`;
 - `PRODUCT_VERSION`: `1.14.1`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
-- a spec da atualização atual é
-  `specs/2026-09-02-sobre-atualizacao-segura.md`.
+- as specs mais recentes são `specs/2026-09-02-sobre-atualizacao-segura.md`
+  e `specs/2026-09-02-fonte-parse-xml.md`.
 
 Nunca descarte o working tree. Antes de qualquer ação execute:
 
@@ -67,18 +67,19 @@ git remote -v
 
 ### 2.2 Produção ativa
 
-Em 28/08/2026 os hosts `181.233.106.46` e `187.19.16.59` foram atualizados
-para `epgserver:v1.13.1-20260828`. A versão mantém o simulador de TV/PIDs e
-separa os metadados: `0x4D` leva idioma/título com texto curto vazio e `0x4E`
-leva a sinopse integral. A validação real capturou 5.313 pacotes em cada host,
-com CRC zero, títulos e sinopses aprovados, preservando 27 emissores no host
-principal e cinco no cliente.
+Em 02/09/2026 o host principal `181.233.106.46` foi atualizado para
+`epgserver:v1.14.1-20260902`. Além das correções anteriores de EIT, simulador e
+atualização segura, essa versão oferece fontes **Parse-XML**: normaliza fontes
+sem `<channel>`, completa timezone, elimina eventos inválidos e mantém uma URL
+interna estável com a última cópia válida. O deploy preservou 27 emissores,
+licença válida e zero reinícios. O cliente `187.19.16.59` permanece na linha
+v1.13.1 até uma promoção explicitamente autorizada.
 
 Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.13.1-20260828` |
+| EPG | `epg-stream`, imagem `epgserver:v1.14.1-20260902` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |
@@ -87,9 +88,9 @@ Host operacional conhecido: `181.233.106.46`.
 | Chave do cliente | volume `epg-license-client-secret` |
 | Segredo mestre v2 | volume `epg-license-master-secret`, modo `0600`, UID/GID 10002 |
 | Emissores | 27 processos `TVStreamEpgOnly` |
-| Canais licenciados | 63 de 80; o mesmo limite já constava no backup pré-corte |
+| Canais licenciados | 63 de 100 na validação de 02/09/2026 |
 | Reinícios dos containers ativos | zero |
-| Rollback EPG imediato | `epg-stream-pre-v1.13.1-20260828-104324` |
+| Rollback EPG imediato | `epg-stream-v1140-rollback-20260902` (imagem v1.14.0, parado) |
 | Rollback licenças imediato | `epg-license-server-pre-v1.1.0-20260827-073708` |
 | Backup EPG | `/srv/epg-stream-backup-pre-v1.12.0-20260827-081608` |
 | Backup autoridade | `epg-license-data-backup-pre-v1.1.0-20260827-073708` |

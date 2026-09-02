@@ -1,12 +1,12 @@
 # Spec: fonte Parse-XML normalizada
 
 - ID: `2026-09-02-fonte-parse-xml`
-- Estado: `validando`
+- Estado: `concluída`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 - Criada em: `2026-09-02`
 - Última atualização: `2026-09-02`
-- Issue/commit relacionado: `a preencher`
+- Commit de implementação: `b4001f5`
 
 ## 1. Resumo
 
@@ -24,10 +24,10 @@ sem alterar fontes XMLTV padrão existentes.
 
 ## 3. Objetivos
 
-- [ ] Permitir escolher `XMLTV padrão` ou `Parse-XML` por fonte.
-- [ ] Sintetizar canais, aplicar `-0300` e remover eventos inválidos.
-- [ ] Entregar ao emissor uma URL interna estável e normalizada.
-- [ ] Manter a última cópia válida quando a origem falhar.
+- [x] Permitir escolher `XMLTV padrão` ou `Parse-XML` por fonte.
+- [x] Sintetizar canais, aplicar `-0300` e remover eventos inválidos.
+- [x] Entregar ao emissor uma URL interna estável e normalizada.
+- [x] Manter a última cópia válida quando a origem falhar.
 
 ## 4. Fora de escopo
 
@@ -85,3 +85,5 @@ ignorados pela versão anterior.
 | 2026-09-02 | testes | 62 testes aprovados; sintaxe Python/JS aprovada |
 | 2026-09-02 | fonte real isolada | HTTP 200; 47 canais, 40.909 programas, cache persistido |
 | 2026-09-02 | interface | formulário Parse-XML aprovado em desktop e 390x844 |
+| 2026-09-02 | implantação | `epgserver:v1.14.1-20260902` saudável; licença válida; 27 emissores; zero reinícios |
+| 2026-09-02 | rollback | v1.14.0 preservada parada como `epg-stream-v1140-rollback-20260902` |
