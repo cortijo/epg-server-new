@@ -1,6 +1,6 @@
 # Spec: saúde do EPG por canal e portadora
 
-- Estado: em validação
+- Estado: concluído e implantado
 - Versão: 1.17.0
 
 ## Objetivo
@@ -35,3 +35,15 @@ com agregação visual por portadora e uma central única de erros.
 - indicador e motivo em cada canal expandido;
 - alerta geral quando houver problemas;
 - botão “Erros do EPG” com contagem e relatório consolidado.
+
+## Validação
+
+- 74 testes aprovados e 5 testes dependentes do ambiente ignorados;
+- JavaScript embarcado e Python validados;
+- imagem `epgserver:v1.17.0-20260903` implantada em `181.233.106.46`;
+- rede `host`, 27 emissores, licença válida, zero reinícios e zero erros críticos;
+- primeira sincronização após reinício força o carregamento das fontes em memória;
+- diagnóstico real: 59 canais sem eventos na janela atual, 2 IDs XMLTV ausentes
+  e 1 falha de fonte, consolidados por canal e portadora no painel;
+- rollback: `epg-stream-pre-v1.17.0-20260903-102411`;
+- backup: `/srv/epg-stream-backup-pre-v1.17.0-20260903-102411`.
