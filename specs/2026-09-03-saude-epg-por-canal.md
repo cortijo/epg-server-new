@@ -35,6 +35,8 @@ com agregação visual por portadora e uma central única de erros.
 - indicador e motivo em cada canal expandido;
 - alerta geral quando houver problemas;
 - botão “Erros do EPG” com contagem e relatório consolidado.
+- nome e URL sanitizada da fonte XMLTV responsável por cada erro, sem usuário,
+  senha ou parâmetros de consulta.
 
 ## Validação
 

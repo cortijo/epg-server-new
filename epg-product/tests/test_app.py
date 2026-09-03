@@ -264,7 +264,9 @@ class EpgProductTests(unittest.TestCase):
         application = object.__new__(Application)
         application.store = mock.Mock()
         application.store.snapshot.return_value = {
-            "sources": [{"id": "source-1"}], "users": [], "xmltv_publications": [],
+            "sources": [{"id": "source-1", "name": "Provedor principal",
+                         "url": "https://user:secret@epg.example/guide.xml?token=hidden"}],
+            "users": [], "xmltv_publications": [],
             "carriers": [{
                 "id": "carrier-1", "name": "Portadora 1", "source_id": "source-1",
                 "services": [
@@ -290,12 +292,18 @@ class EpgProductTests(unittest.TestCase):
         self.assertEqual(health["carriers"][0]["status"], "warning")
         self.assertEqual(health["carriers"][0]["failing"], 1)
         self.assertEqual(health["errors"][0]["code"], "no_programmes")
+        self.assertEqual(health["errors"][0]["source_name"], "Provedor principal")
+        self.assertEqual(health["errors"][0]["source_url"],
+                         "https://epg.example/guide.xml?…")
+        self.assertNotIn("secret", json.dumps(health))
+        self.assertNotIn("hidden", json.dumps(health))
 
     def test_epg_health_ui_has_carrier_channel_and_error_center_indicators(self):
         self.assertIn("Central de erros do EPG", INDEX_HTML)
         self.assertIn("health-dot", INDEX_HTML)
         self.assertIn("Todos os canais com erro", INDEX_HTML)
         self.assertIn("epgHealthAlert", INDEX_HTML)
+        self.assertIn("Fonte XMLTV", INDEX_HTML)
 
     def test_about_and_update_ui_are_available(self):
         self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)

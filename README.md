@@ -167,7 +167,7 @@ Além da imagem Docker, o produto pode ser compilado como pacote Debian nativo:
 
 ```bash
 ./packaging/debian/build-deb.sh
-sudo apt install ./dist/epg-stream_1.17.0-1_amd64.deb
+sudo apt install ./dist/epg-stream_1.17.1-1_amd64.deb
 sudo epg-stream-configure
 ```
 
