@@ -66,3 +66,8 @@ com agregação visual por portadora e uma central única de erros.
 - aplica espera de 60 minutos após falha automática da fonte, evitando consumir
   repetidamente limites de download do provedor;
 - a sincronização manual continua disponível para teste sob demanda.
+- 76 testes aprovados e 5 testes dependentes do ambiente ignorados;
+- imagem `epgserver:v1.17.2-20260903` implantada em `181.233.106.46`, com
+  licença válida, rede host, 27 emissores e zero reinícios;
+- rollback: `epg-stream-pre-v1.17.2-20260903-160251`;
+- backup: `/srv/epg-stream-backup-pre-v1.17.2-20260903-160251`.
