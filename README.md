@@ -20,6 +20,7 @@ por outro agente ou LLM.
 - `scripts/`: auditorias de relógio e PSI/SI ISDB-TB;
 - `epg-product/tests/`: testes automatizados do painel e do domínio;
 - `DOCUMENTACAO_EPG_PRODUTO.md`: documentação técnica e operacional completa;
+- `MODELO_XMLTV_PROVEDOR.md`: contrato XMLTV para homologar novos fornecedores;
 - `specs/`: decisões, critérios de aceite, validações e histórico funcional.
 
 ## Construção
