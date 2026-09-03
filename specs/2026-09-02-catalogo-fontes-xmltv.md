@@ -1,7 +1,7 @@
 # Spec: catálogo e sincronização de fontes XMLTV
 
 - ID: `2026-09-02-catalogo-fontes-xmltv`
-- Estado: `validando`
+- Estado: `validada; implantação pendente`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 - Criada em: `2026-09-02`
@@ -61,3 +61,12 @@ de falha, a última cópia persistida continua disponível.
 - candidato Docker isolado;
 - inspeção visual desktop e móvel;
 - implantação com rollback e preservação dos emissores.
+
+## Registro
+
+| Data | Ação | Resultado |
+|---|---|---|
+| 2026-09-02 | testes | 64 aprovados, 5 ignorados por ausência de Bash no Windows |
+| 2026-09-02 | sintaxe | Python, JavaScript embarcado e `git diff --check` aprovados |
+| 2026-09-02 | Docker | imagem `epgserver:v1.15.0-candidate` compilada no host isoladamente |
+| 2026-09-02 | implantação | não iniciada: backup protegido exige nova autorização administrativa |
