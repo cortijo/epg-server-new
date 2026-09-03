@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -58,21 +59,25 @@ class EpgProductTests(unittest.TestCase):
 
     def test_guide_cache_exposes_source_list_sync_status(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml"})
-        payload = b'''<tv><channel id="sport"><display-name>Sport</display-name></channel>
-          <programme channel="sport" start="20260902000000 -0300" stop="20260902010000 -0300"><title>Jogo</title></programme></tv>'''
+        start = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
+        stop = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y%m%d%H%M%S +0000")
+        payload = f'''<tv><channel id="sport"><display-name>Sport</display-name></channel>
+          <programme channel="sport" start="{start}" stop="{stop}"><title>Jogo</title></programme></tv>'''.encode()
         cache = GuideCache()
         with mock.patch.object(cache, "download", return_value=payload), \
                 mock.patch("app.time.time", return_value=1000):
             cache.get(source, force=True)
         self.assertEqual(cache.status(source), {
             "channel_count": 1, "programme_count": 1,
-            "fetched_at": 1000, "next_refresh_at": 1300,
+            "fetched_at": 1000, "next_refresh_at": 4600,
         })
 
     def test_guide_cache_sync_status_survives_restart_without_source_url(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml"})
-        payload = b'''<tv><channel id="sport"><display-name>Sport</display-name></channel>
-          <programme channel="sport" start="20260902000000 -0300" stop="20260902010000 -0300"><title>Jogo</title></programme></tv>'''
+        start = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
+        stop = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y%m%d%H%M%S +0000")
+        payload = f'''<tv><channel id="sport"><display-name>Sport</display-name></channel>
+          <programme channel="sport" start="{start}" stop="{stop}"><title>Jogo</title></programme></tv>'''.encode()
         with tempfile.TemporaryDirectory() as directory:
             cache = GuideCache(Path(directory))
             with mock.patch.object(cache, "download", return_value=payload), \
@@ -150,12 +155,30 @@ class EpgProductTests(unittest.TestCase):
         catalog = application.catalog("source", force=True)
         self.assertEqual(catalog["programme_count"], 1)
         self.assertEqual(catalog["channel_count"], 1)
-        self.assertEqual(catalog["next_refresh_at"], now + 300)
-        self.assertEqual(catalog["cache_seconds"], 300)
+        self.assertEqual(catalog["next_refresh_at"], now + 3600)
+        self.assertEqual(catalog["cache_seconds"], 3600)
         self.assertEqual(catalog["channels"][0]["current"]["title"], "Ao vivo")
         self.assertEqual(len(catalog["channels"][0]["schedule"]), 1)
         self.assertEqual(catalog["normalization"]["channels_synthesized"], 1)
         application.guides.get.assert_called_once_with({"id": "source"}, True)
+
+    def test_background_sync_refreshes_only_sources_due_after_60_minutes(self):
+        application = object.__new__(Application)
+        application.store = mock.Mock()
+        application.store.snapshot.return_value = {
+            "carriers": [], "sources": [{"id": "due"}, {"id": "fresh"}],
+        }
+        application.license = mock.Mock()
+        application.license.check.return_value = {"valid": True}
+        application.guides = mock.Mock()
+        application.guides.status.side_effect = [
+            {"next_refresh_at": 999}, {"next_refresh_at": 5000},
+        ]
+        application.source_sync_stopping = threading.Event()
+        with mock.patch("app.time.time", return_value=1000):
+            result = application.sync_due_sources_once()
+        self.assertEqual(result["synchronized"], 1)
+        application.guides.get.assert_called_once_with({"id": "due"}, force=True)
 
     def test_about_and_update_ui_are_available(self):
         self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)

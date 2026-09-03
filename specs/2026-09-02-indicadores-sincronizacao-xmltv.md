@@ -14,6 +14,9 @@ nova consulta renovará o cache.
 Os mesmos indicadores também devem aparecer diretamente na listagem
 **Fontes XMLTV**, ao lado das ações de cada fonte.
 
+A partir da v1.15.4, todas as fontes vencidas são sincronizadas realmente em
+segundo plano a cada 60 minutos, sem depender da abertura do painel.
+
 ## Requisitos
 
 - [x] Retornar pela API o total de canais e programas da cópia validada.
@@ -23,13 +26,15 @@ Os mesmos indicadores também devem aparecer diretamente na listagem
 - [x] Preservar Parse-XML, diagnósticos, emissores, PIDs e multicast.
 - [x] Mostrar o resumo na listagem principal de fontes, sem exigir abrir o
   catálogo.
+- [x] Sincronizar fontes vencidas em background, uma vez por hora, somente com
+  licença válida e preservando a última cópia em caso de falha.
 
 ## Contrato
 
 `GET /api/catalog` passa a retornar `channel_count`, `programme_count`,
-`fetched_at`, `next_refresh_at` e `cache_seconds`. A próxima atualização é o
-instante em que o cache fica elegível para renovação; o download ocorre na
-próxima consulta ou imediatamente com `force=1`.
+`fetched_at`, `next_refresh_at` e `cache_seconds`. `next_refresh_at` representa
+o vencimento horário usado pelo worker de background. A ação manual com
+`force=1` continua disponível.
 
 ## Riscos e rollback
 
@@ -46,14 +51,16 @@ próxima consulta ou imediatamente com `force=1`.
 
 ## Registro de execução
 
-- 66 testes Python aprovados; 5 testes de shell ignorados pela ausência do Bash
+- 67 testes Python aprovados; 5 testes de shell ignorados pela ausência do Bash
   no Windows;
 - compilação Python, JavaScript embarcado e `git diff --check` aprovados;
-- imagem `epgserver:v1.15.3-candidate` construída com sucesso;
-- produção promovida para `epgserver:v1.15.3-20260902`, com 27 emissores,
+- imagem `epgserver:v1.15.4-candidate` construída com sucesso;
+- produção promovida para `epgserver:v1.15.4-20260903`, com 27 emissores,
   zero reinícios e zero erros críticos após o deploy;
 - tentativa de validação visual automatizada pelo navegador foi bloqueada pela
   política local para IP/porta e localhost encaminhado; layout responsivo e
   textos foram cobertos por teste automatizado, sem alegar inspeção visual;
-- rollback `epg-stream-v1152-rollback-20260902` e backup
-  `/srv/backups/epg-stream-before-v1153-20260902.tar.gz` preservados.
+- primeira rodada automática gerou estado persistido para 7 fontes, sem erro
+  de sincronização;
+- rollback `epg-stream-v1153-rollback-20260903` e backup
+  `/srv/backups/epg-stream-before-v1154-20260903.tar.gz` preservados.
