@@ -68,12 +68,14 @@ git remote -v
 ### 2.2 Produção ativa
 
 Em 02/09/2026 o host principal `181.233.106.46` foi atualizado para
-`epgserver:v1.15.0-20260902`. Além das correções anteriores de EIT, simulador e
+`epgserver:v1.15.1-20260902`. Além das correções anteriores de EIT, simulador e
 atualização segura, essa versão oferece fontes **Parse-XML**: normaliza fontes
 sem `<channel>`, completa timezone, elimina eventos inválidos e mantém uma URL
 interna estável com a última cópia válida. A v1.15.0 acrescenta o catálogo de
 canais e programação por fonte, sincronização visual e relatório dos ajustes
-Parse-XML. O deploy preservou 27 emissores,
+Parse-XML. A v1.15.1 registra os programas descartados pelo Parse-XML, permite
+consultar o motivo do descarte e adiciona busca por nome ou ID no catálogo de
+canais. O deploy preservou 27 emissores,
 licença válida e zero reinícios. O cliente `187.19.16.59` permanece na linha
 v1.13.1 até uma promoção explicitamente autorizada.
 
@@ -81,7 +83,7 @@ Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.15.0-20260902` |
+| EPG | `epg-stream`, imagem `epgserver:v1.15.1-20260902` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |

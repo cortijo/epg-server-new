@@ -1,7 +1,7 @@
 # Spec: diagnóstico Parse-XML e busca de canais
 
 - ID: `2026-09-02-diagnostico-parse-xml-busca-canais`
-- Estado: `validando`
+- Estado: `concluída`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 
@@ -37,9 +37,19 @@ como omitido para impedir respostas e arquivos sem limite.
 - Rollback: retornar à imagem v1.15.0 usando o mesmo volume; o sidecar adicional
   é ignorado pela versão anterior.
 
-## Validação prevista
+## Validação executada
 
-- testes dos três motivos de descarte e persistência após reinício;
-- suíte Python, sintaxe JavaScript e Docker;
-- fonte Parse-XML real em candidato isolado;
-- produção com licença válida e 27 emissores preservados.
+- 64 testes aprovados e 5 testes de shell ignorados por indisponibilidade do
+  Bash no ambiente Windows;
+- compilação Python, sintaxe do JavaScript embarcado e `git diff --check`
+  aprovados;
+- imagem candidata `epgserver:v1.15.1-candidate` construída antes da promoção;
+- produção promovida para `epgserver:v1.15.1-20260902`, com 27 emissores,
+  zero reinícios e nenhum erro crítico nos cinco minutos posteriores;
+- licença permaneceu válida, com 63 de 100 canais no momento do deploy;
+- backup preservado em
+  `/srv/backups/epg-stream-before-v1151-20260902.tar.gz` e rollback anterior
+  mantido parado.
+
+Depois da atualização, fontes Parse-XML que ainda possuem cache antigo devem
+ser sincronizadas novamente para gerar o primeiro arquivo de diagnóstico.
