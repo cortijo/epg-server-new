@@ -182,6 +182,23 @@ class EpgProductTests(unittest.TestCase):
         self.assertEqual(result["synchronized"], 1)
         application.guides.get.assert_called_once_with({"id": "due"}, force=True)
 
+    def test_background_sync_loads_persisted_status_source_after_restart(self):
+        application = object.__new__(Application)
+        application.store = mock.Mock()
+        application.store.snapshot.return_value = {
+            "carriers": [], "sources": [{"id": "source-1"}],
+        }
+        application.license = mock.Mock()
+        application.license.check.return_value = {"valid": True}
+        application.guides = mock.Mock()
+        application.guides.entries = {}
+        application.guides.status.return_value = {"next_refresh_at": 5000}
+        application.source_sync_stopping = threading.Event()
+        with mock.patch("app.time.time", return_value=1000):
+            result = application.sync_due_sources_once()
+        self.assertEqual(result["synchronized"], 1)
+        application.guides.get.assert_called_once_with({"id": "source-1"}, force=True)
+
     def test_configuration_backup_restore_round_trip_and_local_safety_copy(self):
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory)

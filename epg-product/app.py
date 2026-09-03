@@ -1306,7 +1306,10 @@ class Application:
             if self.source_sync_stopping.is_set():
                 break
             status = self.guides.status(source)
-            if status and current_time < int(status["next_refresh_at"]):
+            cached_entries = getattr(self.guides, "entries", None)
+            loaded_in_memory = (source["id"] in cached_entries
+                                if isinstance(cached_entries, dict) else True)
+            if status and loaded_in_memory and current_time < int(status["next_refresh_at"]):
                 continue
             try:
                 self.guides.get(source, force=True)
