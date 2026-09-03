@@ -81,6 +81,17 @@ docker compose --env-file epg-product/.env \
 O painel usa TCP `9100` e a emissão multicast usa a rede do host. Leia
 `epg-product/README.md` antes da implantação.
 
+## Backup e restauração
+
+Na versão 1.16.0, administradores têm os botões **Backup das configurações** e
+**Restaurar configurações** no painel. O JSON portátil inclui usuários, hashes
+de senha, fontes, portadoras, canais e os identificadores/URLs permanentes das
+publicações. A licença, caches, logs, logotipos e arquivos XMLTV publicados não
+são exportados. Antes de restaurar, o serviço valida todas as referências,
+exige um administrador ativo e grava a configuração anterior em
+`/data/config-backups`; depois da troca atômica, reinicia o serviço. O arquivo
+é sensível e deve ser guardado com acesso restrito.
+
 ## Licenciamento
 
 A partir da versão 1.10.0, o EPG Stream exige uma licença online válida. O
@@ -155,7 +166,7 @@ Além da imagem Docker, o produto pode ser compilado como pacote Debian nativo:
 
 ```bash
 ./packaging/debian/build-deb.sh
-sudo apt install ./dist/epg-stream_1.15.4-1_amd64.deb
+sudo apt install ./dist/epg-stream_1.16.0-1_amd64.deb
 sudo epg-stream-configure
 ```
 

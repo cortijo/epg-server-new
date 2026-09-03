@@ -13,7 +13,7 @@ from app import (
     ApiError, Application, GuideCache, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
     parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
-    validate_source,
+    validate_source, validate_config_backup,
 )
 from license_client import LicenseError, LicenseManager
 
@@ -179,6 +179,46 @@ class EpgProductTests(unittest.TestCase):
             result = application.sync_due_sources_once()
         self.assertEqual(result["synchronized"], 1)
         application.guides.get.assert_called_once_with({"id": "due"}, force=True)
+
+    def test_configuration_backup_restore_round_trip_and_local_safety_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            store = Store(data_dir / "epg-product.json")
+            store.data["users"] = [{
+                "id": "admin-1", "username": "admin", "display_name": "Administrador",
+                "role": "admin", "enabled": True, "created_at": 1, "updated_at": 1,
+                **password_record("password123"),
+            }]
+            store.save()
+            application = object.__new__(Application)
+            application.data_dir = data_dir
+            application.store = store
+            application.guides = GuideCache(data_dir / "parsed-xml-cache")
+            payload = application.configuration_backup()
+            envelope = json.loads(payload)
+            self.assertEqual(envelope["format"], "epg-stream-config-backup")
+            store.data["sources"] = []
+            store.save()
+            result = application.restore_configuration(payload)
+            self.assertTrue(result["restart"])
+            self.assertEqual(len(store.data["sources"]), 1)
+            self.assertEqual(len(list((data_dir / "config-backups").glob("pre-restore-*.json"))), 1)
+
+    def test_configuration_restore_rejects_invalid_format_and_missing_admin(self):
+        with self.assertRaises(ApiError):
+            validate_config_backup(b'{}')
+        invalid = {"format": "epg-stream-config-backup", "format_version": 1,
+                   "data": {"users": [], "sources": [], "carriers": [],
+                            "xmltv_publications": []}}
+        with self.assertRaises(ApiError):
+            validate_config_backup(json.dumps(invalid).encode())
+
+    def test_configuration_backup_restore_ui_is_admin_only(self):
+        self.assertIn("Backup das configurações", INDEX_HTML)
+        self.assertIn("Restaurar configurações", INDEX_HTML)
+        self.assertIn("configBackupButton','configRestoreButton", INDEX_HTML)
+        self.assertIn("/api/config/backup", INDEX_HTML)
+        self.assertIn("/api/config/restore", INDEX_HTML)
 
     def test_about_and_update_ui_are_available(self):
         self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)

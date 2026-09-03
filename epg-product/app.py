@@ -35,7 +35,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.15.4"
+PRODUCT_VERSION = "1.16.0"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
@@ -460,6 +460,75 @@ def validate_source(source: dict[str, Any]) -> dict[str, Any]:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ApiError("A fonte XMLTV deve usar uma URL HTTP ou HTTPS válida")
     return result
+
+
+def validate_config_backup(payload: bytes) -> dict[str, Any]:
+    try:
+        envelope = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiError("O arquivo de backup não contém JSON válido")
+    if not isinstance(envelope, dict) or envelope.get("format") != "epg-stream-config-backup":
+        raise ApiError("Formato de backup incompatível")
+    if int(envelope.get("format_version", 0)) != 1:
+        raise ApiError("Versão do backup incompatível")
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise ApiError("Configuração ausente no backup")
+    required_lists = ("users", "sources", "carriers", "xmltv_publications")
+    if any(not isinstance(data.get(key), list) for key in required_lists):
+        raise ApiError("Estrutura de configuração incompleta")
+    users = data["users"]
+    if not users or not any(user.get("enabled") and user.get("role") == "admin" for user in users):
+        raise ApiError("O backup precisa possuir ao menos um administrador ativo")
+    usernames = set()
+    for user in users:
+        username = str(user.get("username") or "")
+        if (not re.fullmatch(r"[a-z0-9._-]{3,32}", username) or username in usernames or
+                user.get("role") not in {"admin", "operator"} or
+                not all(isinstance(user.get(key), str) and user.get(key)
+                        for key in ("id", "password_salt", "password_hash"))):
+            raise ApiError("O backup contém usuário inválido ou duplicado")
+        usernames.add(username)
+    sources = [validate_source(source) for source in data["sources"]]
+    source_ids = {source["id"] for source in sources}
+    if len(source_ids) != len(sources):
+        raise ApiError("O backup contém fontes duplicadas")
+    carriers = [validate_carrier(carrier) for carrier in data["carriers"]]
+    carrier_ids = {carrier["id"] for carrier in carriers}
+    if len(carrier_ids) != len(carriers):
+        raise ApiError("O backup contém portadoras duplicadas")
+    for carrier in carriers:
+        if carrier["source_id"] not in source_ids:
+            raise ApiError(f"A portadora {carrier['name']} referencia uma fonte inexistente")
+        for service in carrier["services"]:
+            if service["source_id"] and service["source_id"] not in source_ids:
+                raise ApiError(f"O canal {service['name']} referencia uma fonte inexistente")
+    publications = []
+    publication_ids = set()
+    publication_tokens = set()
+    for publication in data["xmltv_publications"]:
+        publication_id = str(publication.get("id") or "")
+        token = str(publication.get("token") or "")
+        name = bounded_text(publication.get("name"), 100)
+        if (not publication_id or not token or not name or publication_id in publication_ids or
+                token in publication_tokens):
+            raise ApiError("O backup contém publicação XMLTV inválida ou duplicada")
+        publication_ids.add(publication_id)
+        publication_tokens.add(token)
+        publications.append({
+            "id": publication_id, "name": name, "token": token, "versions": [],
+            "created_at": int(publication.get("created_at", 0)),
+            "updated_at": int(publication.get("updated_at", 0)),
+        })
+    restored = copy.deepcopy(data)
+    restored["sources"] = sources
+    restored["carriers"] = carriers
+    restored["xmltv_publications"] = publications
+    for carrier in restored["carriers"]:
+        for service in carrier["services"]:
+            service["logo"] = {}
+    restored["schema_version"] = int(data.get("schema_version", 1))
+    return restored
 
 
 def validate_png(payload: bytes) -> tuple[int, int]:
@@ -1241,6 +1310,41 @@ class Application:
         self.source_sync_thread.join(timeout=4)
         self.supervisor.close()
 
+    @staticmethod
+    def _portable_config(data: dict[str, Any]) -> dict[str, Any]:
+        portable = copy.deepcopy(data)
+        for carrier in portable.get("carriers", []):
+            for service in carrier.get("services", []):
+                service["logo"] = {}
+        return portable
+
+    def configuration_backup(self) -> bytes:
+        envelope = {
+            "format": "epg-stream-config-backup",
+            "format_version": 1,
+            "product": PRODUCT_NAME,
+            "product_version": PRODUCT_VERSION,
+            "exported_at": now_epoch(),
+            "data": self._portable_config(self.store.snapshot()),
+        }
+        return (json.dumps(envelope, ensure_ascii=False, indent=2) + "\n").encode()
+
+    def restore_configuration(self, payload: bytes) -> dict[str, Any]:
+        restored = validate_config_backup(payload)
+        backup_dir = self.data_dir / "config-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        previous_path = backup_dir / f"pre-restore-{timestamp}-{uuid.uuid4().hex[:8]}.json"
+        previous_path.write_bytes(self.configuration_backup())
+        os.chmod(previous_path, 0o600)
+        with self.store.lock:
+            self.store.data = restored
+            self.store.save()
+        with self.guides.lock:
+            self.guides.entries.clear()
+        return {"result": "ok", "restart": True,
+                "message": "Configuração restaurada; o serviço será reiniciado"}
+
     def channel_count(self, replacement: dict[str, Any] | None = None) -> int:
         carriers = self.store.snapshot()["carriers"]
         total = 0
@@ -1988,6 +2092,18 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/update":
                 self._require_admin()
                 self._json(update_information(APP.store.path.parent))
+            elif path == "/api/config/backup":
+                self._require_admin()
+                payload = APP.configuration_backup()
+                filename = datetime.now(timezone.utc).strftime("epg-stream-config-%Y%m%dT%H%M%SZ.json")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
             elif path == "/api/sources":
                 self._require_license()
                 self._json({"sources": [
@@ -2052,6 +2168,14 @@ class Handler(BaseHTTPRequestHandler):
                 filename = query.get("filename", ["guide.xml"])[0]
                 result = APP.upload_publication(publication_id, filename, self._raw_body(MAX_XMLTV))
                 self._json(result)
+                return
+            if path == "/api/config/restore":
+                self._require_admin()
+                result = APP.restore_configuration(self._raw_body(MAX_BODY))
+                self._json(result)
+                restart = threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM))
+                restart.daemon = True
+                restart.start()
                 return
             request = self._body()
             if path == "/api/users":
@@ -2138,11 +2262,14 @@ document.head.insertAdjacentHTML('beforeend','<style>.modal.source-catalog-modal
 document.head.insertAdjacentHTML('beforeend','<style>.catalog-search{margin:12px 0}.catalog-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:15px 0}.catalog-metric{padding:13px 14px;border:1px solid var(--line);border-radius:10px;background:#f8fbfd}.catalog-metric b{display:block;margin-top:5px;font-size:17px}.parse-errors{margin:12px 0;border:1px solid #efb5ba;border-radius:10px;background:#fff7f7;padding:12px}.parse-errors summary{cursor:pointer;font-weight:800;color:#a52b34}.parse-error-table{width:100%;border-collapse:collapse;margin-top:9px}.parse-error-table th,.parse-error-table td{padding:8px;border-top:1px solid #f1d6d8;text-align:left;vertical-align:top;font-size:12px}.parse-error-table th{color:var(--muted)}@media(max-width:760px){.catalog-metrics{grid-template-columns:1fr 1fr}.catalog-metric b{font-size:14px}}</style>');
 let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},timelineCarrierId='',timelineStart=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="licenseButton" style="display:none" onclick="openLicense()">Licença</button>');
+document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="configRestoreButton" style="display:none" onclick="el(\'configRestoreFile\').click()">Restaurar configurações</button><input id="configRestoreFile" type="file" accept=".json,application/json" hidden onchange="restoreConfiguration(this)"><button id="configBackupButton" style="display:none" onclick="backupConfiguration()">Backup das configurações</button>');
 document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="tvSimulatorButton" onclick="openTvSimulator()">Simular TV / PIDs</button>');
 const fmt=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'--:--';
 function toast(message,error=false){el('toast').innerHTML=`<div class="toast ${error?'error-text':''}">${esc(message)}</div>`;setTimeout(()=>el('toast').innerHTML='',3500)}
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt});const j=await r.json().catch(()=>({error:'Resposta inválida'}));if(!r.ok||j.error)throw Error(j.error||`HTTP ${r.status}`);return j}
-async function refresh(){try{const loaded=await Promise.all([api('/api/state'),api('/api/session')]);state=loaded[0];session=loaded[1];const valid=!!state.license?.valid,admin=session.user?.role==='admin';sources=valid?(await api('/api/sources')).sources:[];el('usersButton').style.display=admin?'':'none';el('licenseButton').style.display=admin?'':'none';el('restartAllButton').style.display=admin?'':'none';for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton','tvSimulatorButton'])el(id).disabled=!valid;el('timelineButton').disabled=!valid||!(state.carriers||[]).length;el('licenseAlert').hidden=valid;render();el('clock').textContent=`${session.user?.display_name||''} · ${new Date().toLocaleTimeString('pt-BR')}`}catch(e){toast(e.message,true)}}
+async function refresh(){try{const loaded=await Promise.all([api('/api/state'),api('/api/session')]);state=loaded[0];session=loaded[1];const valid=!!state.license?.valid,admin=session.user?.role==='admin';sources=valid?(await api('/api/sources')).sources:[];el('usersButton').style.display=admin?'':'none';el('licenseButton').style.display=admin?'':'none';for(const id of ['configBackupButton','configRestoreButton','restartAllButton'])el(id).style.display=admin?'':'none';for(const id of ['publicationsButton','sourcesButton','timelineButton','restartAllButton','newCarrierButton','tvSimulatorButton'])el(id).disabled=!valid;el('timelineButton').disabled=!valid||!(state.carriers||[]).length;el('licenseAlert').hidden=valid;render();el('clock').textContent=`${session.user?.display_name||''} · ${new Date().toLocaleTimeString('pt-BR')}`}catch(e){toast(e.message,true)}}
+function backupConfiguration(){if(confirm('O backup contém usuários, hashes de senha, URLs e tokens de fontes. Guarde o arquivo em local seguro. Deseja continuar?'))location.href='/api/config/backup'}
+async function restoreConfiguration(input){const file=input.files?.[0];input.value='';if(!file)return;if(file.size>3*1024*1024){toast('O backup deve possuir no máximo 3 MiB',true);return}if(!confirm('Restaurar esta configuração? Usuários, senhas, fontes e portadoras atuais serão substituídos e o serviço será reiniciado.'))return;try{const response=await fetch('/api/config/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:file});const result=await response.json().catch(()=>({error:'Resposta inválida'}));if(!response.ok||result.error)throw Error(result.error||`HTTP ${response.status}`);alert(result.message||'Configuração restaurada. O serviço será reiniciado.');setTimeout(()=>location.reload(),5000)}catch(e){toast(e.message,true)}}
 function render(){const cs=state.carriers||[],license=state.license||{};el('mCarriers').textContent=cs.length;el('mActive').textContent=cs.filter(c=>c.active).length;el('mServices').textContent=cs.reduce((n,c)=>n+c.services.length,0);el('mRestarts').textContent=cs.reduce((n,c)=>n+(c.restart_count||0),0);el('mLicense').textContent=license.valid?`${license.channel_count}/${license.max_channels}`:'Bloqueada';el('licenseReason').textContent=license.valid?'canais utilizados':license.reason||'Licença inválida';el('licenseMetric').className=`metric ${license.valid?'license-valid':'license-invalid'}`;el('carrierTable').innerHTML=cs.length?`<div class="table-wrap"><table class="carrier-table"><thead><tr><th>Portadora</th><th>Destino multicast</th><th>Canais</th><th>Estado</th><th class="actions-col">Ações</th></tr></thead><tbody>${cs.map(carrierRows).join('')}</tbody></table></div>`:'<div class="card empty"><h3>Nenhuma portadora cadastrada</h3><p>Cadastre a primeira portadora e associe os canais do XMLTV.</p></div>'}
 function utcOffsetLabel(minutes){const sign=minutes<0?'-':'+';const absolute=Math.abs(minutes);return `UTC${sign}${String(Math.floor(absolute/60)).padStart(2,'0')}:${String(absolute%60).padStart(2,'0')}`}
 function clockLabel(c){return c.clock_mode==='custom'?`${utcOffsetLabel(c.clock_utc_offset_minutes??-180)} · correção ${c.clock_correction_minutes>0?'+':''}${c.clock_correction_minutes||0} min`:'Padrão UTC-03:00'}
@@ -2179,7 +2306,7 @@ async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encode
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
 async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
 function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
-function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.15.4</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
+function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.16.0</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
 async function checkUpdate(){const info=el('updateInfo');if(info)info.textContent='Consultando a release oficial…';try{const u=await api('/api/update');const mode=u.install_mode==='native'?'Pacote nativo':'Docker';const last=u.last_update?.message?`<p class="muted">Última tentativa: ${esc(u.last_update.message)}</p>`:'';const action=u.update_available&&u.asset_available&&u.install_mode==='native'?`<button class="primary" onclick="applyUpdate('${esc(u.tag)}')">Atualizar agora para ${esc(u.latest_version)}</button>`:'';const docker=u.install_mode!=='native'&&u.update_available?'<p class="muted">Esta instalação usa Docker. Atualize a imagem pelo host para preservar volumes e rollback.</p>':'';info.innerHTML=`<p><b>Instalação:</b> ${mode}</p><p><b>Versão instalada:</b> ${esc(u.current_version)}</p><p><b>Última release:</b> ${esc(u.latest_version)}</p><p>${u.update_available?'Existe uma atualização disponível.':'O sistema está atualizado.'}</p>${docker}${last}${action}`}catch(e){if(info)info.innerHTML=`<span class="error-text">${esc(e.message)}</span>`}}
 async function applyUpdate(tag){if(!confirm(`Atualizar o EPG Stream para ${tag}? Os serviços serão reiniciados durante a instalação.`))return;try{const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({tag})});toast(r.message||'Atualização solicitada');const info=el('updateInfo');if(info)info.innerHTML='<b>Atualização agendada.</b><p class="muted">O serviço será reiniciado após validar e instalar o pacote. Reabra o painel em alguns instantes.</p>'}catch(e){toast(e.message,true)}}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do EPG Stream</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}
