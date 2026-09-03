@@ -20,7 +20,7 @@ python3 /usr/lib/epg-stream/app.py >/tmp/epg-native.log 2>&1 & pid=$!
 trap "kill $pid 2>/dev/null || true" EXIT
 ready=0
 for _ in $(seq 1 20); do
-  if python3 -c "import http.client; c=http.client.HTTPConnection(\"127.0.0.1\",19140,timeout=1); c.request(\"GET\",\"/health\"); r=c.getresponse(); b=r.read().decode(); assert r.status in (200,503) and \"1.16.0\" in b"; then ready=1; break; fi
+  if python3 -c "import http.client; c=http.client.HTTPConnection(\"127.0.0.1\",19140,timeout=1); c.request(\"GET\",\"/health\"); r=c.getresponse(); b=r.read().decode(); assert r.status in (200,503) and \"1.16.1\" in b"; then ready=1; break; fi
   sleep 1
 done
 test "$ready" = 1

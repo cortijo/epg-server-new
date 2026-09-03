@@ -83,11 +83,11 @@ O painel usa TCP `9100` e a emissão multicast usa a rede do host. Leia
 
 ## Backup e restauração
 
-Na versão 1.16.0, administradores têm os botões **Backup das configurações** e
-**Restaurar configurações** no painel. O JSON portátil inclui usuários, hashes
-de senha, fontes, portadoras, canais e os identificadores/URLs permanentes das
-publicações. A licença, caches, logs, logotipos e arquivos XMLTV publicados não
-são exportados. Antes de restaurar, o serviço valida todas as referências,
+Na versão 1.16.1, administradores têm os botões **Baixar backup completo** e
+**Restaurar backup completo** no painel. O pacote `.tar.gz` inclui a configuração
+e todos os arquivos persistentes de `/data`, inclusive XMLTV normalizados,
+publicações, caches, logotipos e logs. A licença fica fora porque usa o volume
+separado `/license`. Antes de restaurar, o serviço valida caminhos e referências,
 exige um administrador ativo e grava a configuração anterior em
 `/data/config-backups`; depois da troca atômica, reinicia o serviço. O arquivo
 é sensível e deve ser guardado com acesso restrito.
@@ -166,7 +166,7 @@ Além da imagem Docker, o produto pode ser compilado como pacote Debian nativo:
 
 ```bash
 ./packaging/debian/build-deb.sh
-sudo apt install ./dist/epg-stream_1.16.0-1_amd64.deb
+sudo apt install ./dist/epg-stream_1.16.1-1_amd64.deb
 sudo epg-stream-configure
 ```
 

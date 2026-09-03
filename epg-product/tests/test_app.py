@@ -1,4 +1,6 @@
 import json
+import io
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -194,15 +196,24 @@ class EpgProductTests(unittest.TestCase):
             application.data_dir = data_dir
             application.store = store
             application.guides = GuideCache(data_dir / "parsed-xml-cache")
+            normalized = data_dir / "parsed-xml-cache" / "source.xml"
+            normalized.parent.mkdir(parents=True, exist_ok=True)
+            normalized.write_text("<tv><channel id='teste'/></tv>", encoding="utf-8")
             payload = application.configuration_backup()
-            envelope = json.loads(payload)
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+                envelope = json.load(archive.extractfile("manifest.json"))
+                self.assertEqual(archive.extractfile("data/parsed-xml-cache/source.xml").read(),
+                                 normalized.read_bytes())
             self.assertEqual(envelope["format"], "epg-stream-config-backup")
             store.data["sources"] = []
             store.save()
+            normalized.unlink()
             result = application.restore_configuration(payload)
             self.assertTrue(result["restart"])
             self.assertEqual(len(store.data["sources"]), 1)
-            self.assertEqual(len(list((data_dir / "config-backups").glob("pre-restore-*.json"))), 1)
+            self.assertEqual(normalized.read_text(encoding="utf-8"),
+                             "<tv><channel id='teste'/></tv>")
+            self.assertEqual(len(list((data_dir / "config-backups").glob("pre-restore-*.tar.gz"))), 1)
 
     def test_configuration_restore_rejects_invalid_format_and_missing_admin(self):
         with self.assertRaises(ApiError):
@@ -213,9 +224,20 @@ class EpgProductTests(unittest.TestCase):
         with self.assertRaises(ApiError):
             validate_config_backup(json.dumps(invalid).encode())
 
+    def test_configuration_restore_rejects_archive_path_traversal(self):
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode="w:gz") as archive:
+            content = b"unsafe"
+            member = tarfile.TarInfo("data/../../outside.txt")
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ApiError):
+                Application._extract_configuration_backup(output.getvalue(), Path(directory))
+
     def test_configuration_backup_restore_ui_is_admin_only(self):
-        self.assertIn("Backup das configurações", INDEX_HTML)
-        self.assertIn("Restaurar configurações", INDEX_HTML)
+        self.assertIn("Baixar backup completo", INDEX_HTML)
+        self.assertIn("Restaurar backup completo", INDEX_HTML)
         self.assertIn("configBackupButton','configRestoreButton", INDEX_HTML)
         self.assertIn("/api/config/backup", INDEX_HTML)
         self.assertIn("/api/config/restore", INDEX_HTML)
