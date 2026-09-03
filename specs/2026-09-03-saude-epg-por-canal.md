@@ -49,3 +49,13 @@ com agregação visual por portadora e uma central única de erros.
   e 1 falha de fonte, consolidados por canal e portadora no painel;
 - rollback: `epg-stream-pre-v1.17.0-20260903-102411`;
 - backup: `/srv/epg-stream-backup-pre-v1.17.0-20260903-102411`.
+
+## Complemento v1.17.1
+
+- a central identifica o nome da fonte e a URL XMLTV relacionada ao erro;
+- credenciais de URL e parâmetros de consulta são removidos da resposta;
+- 74 testes aprovados;
+- imagem `epgserver:v1.17.1-20260903` implantada com 27 emissores, rede host,
+  licença válida e zero reinícios;
+- rollback: `epg-stream-pre-v1.17.1-20260903-124609`;
+- backup: `/srv/epg-stream-backup-pre-v1.17.1-20260903-124609`.
