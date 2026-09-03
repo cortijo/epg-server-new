@@ -1,7 +1,7 @@
 # Spec: backup e restauração das configurações
 
 - ID: `2026-09-03-backup-restore-configuracoes`
-- Estado: `validado localmente`
+- Estado: `concluído e implantado`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 
@@ -55,3 +55,13 @@ restrito.
 - publicações preservam nome e URL permanente, mas suas versões ficam vazias porque
   os arquivos XMLTV não fazem parte do backup portátil;
 - logotipos também não são exportados, evitando referências inválidas em outro host.
+
+## Produção
+
+- servidor: `181.233.106.46`;
+- imagem: `epgserver:v1.16.0-20260903`;
+- container: `epg-stream`, saudável, licença válida e zero reinícios;
+- 27 processos emissores preservados após o corte;
+- backup: `/srv/epg-stream-backup-pre-v1.16.0-20260903-074830`;
+- rollback: `epg-stream-pre-v1.16.0-20260903-074830`;
+- endpoint de backup confirmou autenticação obrigatória sem alterar dados reais.

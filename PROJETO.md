@@ -68,7 +68,7 @@ git remote -v
 ### 2.2 Produção ativa
 
 Em 02/09/2026 o host principal `181.233.106.46` foi atualizado para
-`epgserver:v1.15.4-20260903`. Além das correções anteriores de EIT, simulador e
+`epgserver:v1.16.0-20260903`. Além das correções anteriores de EIT, simulador e
 atualização segura, essa versão oferece fontes **Parse-XML**: normaliza fontes
 sem `<channel>`, completa timezone, elimina eventos inválidos e mantém uma URL
 interna estável com a última cópia válida. A v1.15.0 acrescenta o catálogo de
@@ -88,7 +88,7 @@ Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.15.4-20260903` |
+| EPG | `epg-stream`, imagem `epgserver:v1.16.0-20260903` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |
