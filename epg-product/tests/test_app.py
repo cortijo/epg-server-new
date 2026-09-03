@@ -29,11 +29,13 @@ class EpgProductTests(unittest.TestCase):
           <programme channel="0071 CANAL" start="{distant_start}" stop="{distant_stop}"><title>Futuro</title><desc>Sinopse</desc></programme>
           <programme channel="0043 OUTRO" start="{current_start}" stop="{current_start}"><title>Inválido</title></programme>
         </tv>'''.encode()
-        normalized, stats = normalize_uploaded_xmltv(payload)
+        normalized, stats = normalize_uploaded_xmltv(payload, collect_errors=True)
         full = parse_xmltv(normalized, bounded=False)
         self.assertEqual(stats["channels_synthesized"], 1)
         self.assertEqual(stats["invalid_programmes_removed"], 1)
         self.assertEqual(stats["programmes"], 2)
+        self.assertEqual(stats["invalid_programmes"][0]["title"], "Inválido")
+        self.assertIn("Duração inválida", stats["invalid_programmes"][0]["reason"])
         self.assertEqual(len(full["channels"]), 1)
         self.assertEqual(sum(map(len, full["programmes"].values())), 2)
         self.assertIn(b" -0300", normalized)
@@ -41,7 +43,10 @@ class EpgProductTests(unittest.TestCase):
     def test_parse_xml_cache_keeps_last_valid_normalization(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
                                   "source_type": "parse_xml"})
-        payload = b'''<tv><programme channel="0001 TESTE" start="20260902000000" stop="20260903000000"><title>Grade</title></programme></tv>'''
+        payload = '''<tv>
+          <programme channel="0001 TESTE" start="20260902000000" stop="20260903000000"><title>Grade</title></programme>
+          <programme channel="0001 TESTE" start="20260902000000" stop="20260902000000"><title>Sem duração</title></programme>
+        </tv>'''.encode()
         cache = GuideCache()
         with mock.patch.object(cache, "download", return_value=payload):
             first = cache.get(source, force=True)
@@ -54,7 +59,10 @@ class EpgProductTests(unittest.TestCase):
     def test_parse_xml_cache_survives_application_restart(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
                                   "source_type": "parse_xml"})
-        payload = b'''<tv><programme channel="0001 TESTE" start="20260902000000" stop="20260903000000"><title>Grade</title></programme></tv>'''
+        payload = '''<tv>
+          <programme channel="0001 TESTE" start="20260902000000" stop="20260903000000"><title>Grade</title></programme>
+          <programme channel="0001 TESTE" start="20260902000000" stop="20260902000000"><title>Sem duração</title></programme>
+        </tv>'''.encode()
         with tempfile.TemporaryDirectory() as directory:
             first_cache = GuideCache(Path(directory))
             with mock.patch.object(first_cache, "download", return_value=payload):
@@ -64,6 +72,8 @@ class EpgProductTests(unittest.TestCase):
                 restored = second_cache.get(source, force=True)
             self.assertTrue(restored["normalization"]["persisted_fallback"])
             self.assertEqual(len(restored["channels"]), 1)
+            self.assertEqual(restored["normalization"]["invalid_programmes"][0]["title"],
+                             "Sem duração")
 
     def test_parse_xml_runtime_url_is_internal_and_token_is_not_in_apis(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
@@ -85,6 +95,8 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("Sincronizando canais…", INDEX_HTML)
         self.assertIn("Ajustes aplicados pelo Parse-XML", INDEX_HTML)
         self.assertIn("channels_synthesized", INDEX_HTML)
+        self.assertIn("Buscar canal por nome ou ID XMLTV", INDEX_HTML)
+        self.assertIn("Consultar ${errors.length} programa(s) inválido(s)", INDEX_HTML)
 
     def test_source_catalog_returns_channel_schedule_and_normalization(self):
         now = int(datetime.now(timezone.utc).timestamp())

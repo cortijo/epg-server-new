@@ -48,8 +48,8 @@ o candidato e a produção estejam na mesma versão.
 ### 2.1 Git e código local
 
 - implementação Parse-XML: `b4001f5`;
-- tag prevista para o estado final documentado: `epg-v1.15.0`;
-- `PRODUCT_VERSION`: `1.15.0`;
+- tag prevista para o estado final documentado: `epg-v1.15.1`;
+- `PRODUCT_VERSION`: `1.15.1`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;

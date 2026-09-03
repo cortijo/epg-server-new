@@ -232,6 +232,13 @@ o link aceitável: canais criados, timezone UTC−03:00 incluído, referências 
 IDs ajustadas, duplicidades removidas e programas inválidos descartados. Esse
 relatório é apenas diagnóstico e não altera PIDs ou a emissão multicast.
 
+Na v1.15.1, **Consultar programas inválidos** mostra canal, título, datas
+originais e motivo do descarte. O relatório fica persistido ao lado do cache
+normalizado em `TOKEN.diagnostics.json`, modo `0600`, e permanece consultável
+após reinício. Por segurança, são detalhados até 2.000 eventos e o excedente é
+informado separadamente. O catálogo também possui busca instantânea por nome ou
+ID XMLTV; a filtragem ocorre no navegador e não renova a fonte.
+
 ### 4.1 Publicações XMLTV versionadas
 
 O módulo **Publicações XMLTV** recebe XML, XMLTV ou GZIP autenticado com limite

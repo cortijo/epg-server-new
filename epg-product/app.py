@@ -35,7 +35,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.15.0"
+PRODUCT_VERSION = "1.15.1"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
@@ -296,7 +296,7 @@ def _normalized_xmltv_time(value: str) -> tuple[str, bool]:
     return text, added
 
 
-def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
+def normalize_uploaded_xmltv(payload: bytes, collect_errors: bool = False) -> tuple[bytes, dict[str, Any]]:
     """Normalize a provider XMLTV into the strict feed consumed by both parsers."""
     if payload[:2] == b"\x1f\x8b":
         try:
@@ -319,6 +319,9 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
         "channels_synthesized": 0, "duplicate_channels_removed": 0,
         "invalid_programmes_removed": 0,
     }
+    if collect_errors:
+        stats["invalid_programmes"] = []
+        stats["invalid_programmes_truncated"] = 0
     declared: dict[str, ET.Element] = {}
     prefix_candidates: dict[str, set[str]] = {}
     for child in list(root):
@@ -343,6 +346,9 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
             continue
         stats["programmes_original"] += 1
         channel_id = (child.get("channel") or "").strip()
+        raw_start = (child.get("start") or "").strip()
+        raw_stop = (child.get("stop") or "").strip()
+        title = element_text(child.find("title"), "Sem título")
         missing_channel = False
         if channel_id not in declared:
             candidates = prefix_candidates.get(_numeric_channel_prefix(channel_id), set())
@@ -354,16 +360,29 @@ def normalize_uploaded_xmltv(payload: bytes) -> tuple[bytes, dict[str, Any]]:
                     stats["channel_refs_rewritten"] += 1
             elif channel_id:
                 missing_channel = True
+        reason = ""
         try:
-            start_text, start_added = _normalized_xmltv_time(child.get("start") or "")
-            stop_text, stop_added = _normalized_xmltv_time(child.get("stop") or "")
+            start_text, start_added = _normalized_xmltv_time(raw_start)
+            stop_text, stop_added = _normalized_xmltv_time(raw_stop)
             start = parse_xmltv_datetime(start_text)
             stop = parse_xmltv_datetime(stop_text)
-            if not channel_id or stop <= start:
-                raise ValueError("evento sem canal ou duração válida")
+            if not channel_id:
+                reason = "Canal não informado"
+            elif stop <= start:
+                reason = "Duração inválida: término menor ou igual ao início"
         except ValueError:
+            reason = "Data de início ou término inválida"
+        if reason:
             root.remove(child)
             stats["invalid_programmes_removed"] += 1
+            if collect_errors:
+                details = stats["invalid_programmes"]
+                if len(details) < 2000:
+                    details.append({"channel_id": channel_id[:256], "title": title[:512],
+                                    "start": raw_start[:64], "stop": raw_stop[:64],
+                                    "reason": reason})
+                else:
+                    stats["invalid_programmes_truncated"] += 1
             continue
         child.set("channel", channel_id)
         child.set("start", start_text)
@@ -720,7 +739,8 @@ class GuideCache:
             return None
         return self.cache_dir / f"{token}.xml"
 
-    def _persist_normalized(self, source: dict[str, Any], payload: bytes) -> None:
+    def _persist_normalized(self, source: dict[str, Any], payload: bytes,
+                            diagnostics: dict[str, Any]) -> None:
         path = self._parse_cache_path(source)
         if not path:
             return
@@ -728,6 +748,12 @@ class GuideCache:
         temporary.write_bytes(payload)
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
+        diagnostics_path = path.with_suffix(".diagnostics.json")
+        diagnostics_temporary = diagnostics_path.with_name(
+            f".{diagnostics_path.name}.{uuid.uuid4().hex}.tmp")
+        diagnostics_temporary.write_text(json.dumps(diagnostics, ensure_ascii=False), encoding="utf-8")
+        os.chmod(diagnostics_temporary, 0o600)
+        os.replace(diagnostics_temporary, diagnostics_path)
 
     def _load_persisted(self, source: dict[str, Any]) -> dict[str, Any] | None:
         path = self._parse_cache_path(source)
@@ -735,14 +761,22 @@ class GuideCache:
             return None
         payload = path.read_bytes()
         parsed = parse_xmltv(payload)
+        diagnostics = None
+        diagnostics_path = path.with_suffix(".diagnostics.json")
+        if diagnostics_path.is_file() and diagnostics_path.stat().st_size <= 4 * 1024 * 1024:
+            try:
+                diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                diagnostics = None
+        normalization = copy.deepcopy(diagnostics) if isinstance(diagnostics, dict) else {
+            "channels": len(parsed["channels"]),
+            "programmes": sum(map(len, parsed["programmes"].values())),
+        }
+        normalization["persisted_fallback"] = True
         parsed.update({
             "fetched_at": path.stat().st_mtime, "bytes": len(payload),
             "source_id": source["id"], "normalized_payload": payload,
-            "normalization": {
-                "channels": len(parsed["channels"]),
-                "programmes": sum(map(len, parsed["programmes"].values())),
-                "persisted_fallback": True,
-            },
+            "normalization": normalization,
         })
         return parsed
 
@@ -777,12 +811,12 @@ class GuideCache:
             payload = self.download(source["url"])
             stats = None
             if source.get("source_type", "xmltv") == "parse_xml":
-                payload, stats = normalize_uploaded_xmltv(payload)
+                payload, stats = normalize_uploaded_xmltv(payload, collect_errors=True)
             parsed = parse_xmltv(payload)
             parsed.update({"fetched_at": time.time(), "bytes": len(payload), "source_id": source_id})
             if stats is not None:
                 parsed.update({"normalized_payload": payload, "normalization": stats})
-                self._persist_normalized(source, payload)
+                self._persist_normalized(source, payload, stats)
         except Exception:
             # Never replace a previously validated guide with a broken refresh.
             if cached:
@@ -1995,6 +2029,7 @@ document.head.insertAdjacentHTML('beforeend','<style>.service-edit{grid-template
 document.head.insertAdjacentHTML('beforeend','<style>.modal.timeline-modal{width:min(1420px,100%);padding:0;overflow:hidden}.timeline-head{padding:22px 24px 16px;border-bottom:1px solid var(--line)}.timeline-tools{display:flex;gap:9px;align-items:end;flex-wrap:wrap}.timeline-tools label{min-width:240px}.timeline-scroll{overflow:auto;max-height:70vh;background:#f8fbfd}.timeline-board{min-width:1120px}.timeline-axis,.timeline-row{display:grid;grid-template-columns:180px 1fr}.timeline-axis{position:sticky;top:0;z-index:4;background:#eef5fa;border-bottom:1px solid #cbd8e4}.timeline-corner,.timeline-channel{position:sticky;left:0;z-index:3;background:#fff;border-right:1px solid #cbd8e4}.timeline-corner{background:#eef5fa;padding:13px 14px;font-weight:800}.timeline-hours{position:relative;height:45px;background:repeating-linear-gradient(to right,transparent 0,transparent calc(16.666% - 1px),#cbd8e4 calc(16.666% - 1px),#cbd8e4 16.666%)}.timeline-hour{position:absolute;top:13px;transform:translateX(8px);font-size:12px;font-weight:750;color:#526477}.timeline-row{min-height:82px;border-bottom:1px solid var(--line)}.timeline-channel{display:flex;gap:9px;align-items:center;padding:10px 12px}.timeline-channel img{width:54px;height:36px;object-fit:contain}.timeline-channel strong{display:block}.timeline-track{position:relative;min-height:82px;background:repeating-linear-gradient(to right,#fff 0,#fff calc(16.666% - 1px),#e1e8ee calc(16.666% - 1px),#e1e8ee 16.666%)}.timeline-program{position:absolute;top:7px;height:68px;overflow:hidden;padding:8px 9px;border:1px solid #a9cde2;border-radius:8px;background:linear-gradient(145deg,#e9f7ff,#d8eefb);color:#0a426a;text-align:left;font-weight:600}.timeline-program.current{background:linear-gradient(145deg,#087ec1,#14a9dd);border-color:#087ec1;color:#fff}.timeline-program b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.timeline-program small{display:block;margin-top:5px;opacity:.8}.timeline-empty{padding:29px 14px;color:var(--muted)}.timeline-now{position:absolute;top:0;bottom:0;width:2px;background:#df4c55;z-index:2;pointer-events:none}.timeline-now:before{content:"Agora";position:absolute;top:2px;left:4px;background:#df4c55;color:#fff;padding:2px 5px;border-radius:4px;font-size:9px;font-weight:800}.timeline-now.track:before{display:none}@media(max-width:760px){.modal-back{padding:8px}.modal.timeline-modal{max-height:96vh}.timeline-head{padding:16px}.timeline-tools label{min-width:100%}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.modal.publication-modal{width:min(1180px,100%)}.publication-card{border:1px solid var(--line);border-radius:13px;padding:16px;margin-top:13px;background:#f9fbfd}.publication-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.publication-url{display:flex;gap:7px;margin:12px 0}.publication-url input{font-family:Consolas,monospace;font-size:12px}.version-table{width:100%;border-collapse:collapse;background:#fff}.version-table th,.version-table td{padding:9px;border-top:1px solid var(--line);text-align:left;font-size:12px}.version-table th{color:var(--muted);font-size:10px;text-transform:uppercase}.upload-label{display:inline-flex;flex-direction:row;align-items:center;background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff;border-radius:9px;padding:10px 14px;cursor:pointer}.upload-label input{display:none}@media(max-width:760px){.publication-title,.publication-url{flex-direction:column}.version-table{min-width:850px}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.modal.source-catalog-modal{width:min(1320px,100%)}.sync-state{display:flex;min-height:280px;align-items:center;justify-content:center;flex-direction:column;gap:16px;text-align:center}.sync-spinner{width:48px;height:48px;border:5px solid #dbe9f2;border-top-color:var(--blue);border-radius:50%;animation:syncspin .8s linear infinite}@keyframes syncspin{to{transform:rotate(360deg)}}.parse-report{margin:15px 0;padding:14px 16px;border:1px solid #9bd9be;border-radius:11px;background:#effbf5}.parse-report h3{margin:0 0 8px}.parse-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.parse-grid div{padding:9px;background:#fff;border-radius:8px}.source-channel-table{width:100%;border-collapse:collapse}.source-channel-table th,.source-channel-table td{padding:10px;border-top:1px solid var(--line);text-align:left;vertical-align:top}.source-channel-table th{position:sticky;top:0;background:#edf4fa;z-index:1}.source-schedule{margin-top:8px;display:grid;gap:5px}.source-schedule div{padding:7px 9px;border-radius:7px;background:#f4f8fb}.source-schedule time{display:inline-block;min-width:112px;color:var(--muted)}@media(max-width:760px){.parse-grid{grid-template-columns:1fr 1fr}.source-channel-table{min-width:850px}}</style>');
+document.head.insertAdjacentHTML('beforeend','<style>.catalog-search{margin:12px 0}.parse-errors{margin:12px 0;border:1px solid #efb5ba;border-radius:10px;background:#fff7f7;padding:12px}.parse-errors summary{cursor:pointer;font-weight:800;color:#a52b34}.parse-error-table{width:100%;border-collapse:collapse;margin-top:9px}.parse-error-table th,.parse-error-table td{padding:8px;border-top:1px solid #f1d6d8;text-align:left;vertical-align:top;font-size:12px}.parse-error-table th{color:var(--muted)}</style>');
 let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},timelineCarrierId='',timelineStart=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="licenseButton" style="display:none" onclick="openLicense()">Licença</button>');
 document.querySelector('main .toolbar .actions').insertAdjacentHTML('afterbegin','<button id="tvSimulatorButton" onclick="openTvSimulator()">Simular TV / PIDs</button>');
@@ -2038,7 +2073,7 @@ async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encode
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
 async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
 function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
-function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.15.0</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
+function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.15.1</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
 async function checkUpdate(){const info=el('updateInfo');if(info)info.textContent='Consultando a release oficial…';try{const u=await api('/api/update');const mode=u.install_mode==='native'?'Pacote nativo':'Docker';const last=u.last_update?.message?`<p class="muted">Última tentativa: ${esc(u.last_update.message)}</p>`:'';const action=u.update_available&&u.asset_available&&u.install_mode==='native'?`<button class="primary" onclick="applyUpdate('${esc(u.tag)}')">Atualizar agora para ${esc(u.latest_version)}</button>`:'';const docker=u.install_mode!=='native'&&u.update_available?'<p class="muted">Esta instalação usa Docker. Atualize a imagem pelo host para preservar volumes e rollback.</p>':'';info.innerHTML=`<p><b>Instalação:</b> ${mode}</p><p><b>Versão instalada:</b> ${esc(u.current_version)}</p><p><b>Última release:</b> ${esc(u.latest_version)}</p><p>${u.update_available?'Existe uma atualização disponível.':'O sistema está atualizado.'}</p>${docker}${last}${action}`}catch(e){if(info)info.innerHTML=`<span class="error-text">${esc(e.message)}</span>`}}
 async function applyUpdate(tag){if(!confirm(`Atualizar o EPG Stream para ${tag}? Os serviços serão reiniciados durante a instalação.`))return;try{const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({tag})});toast(r.message||'Atualização solicitada');const info=el('updateInfo');if(info)info.innerHTML='<b>Atualização agendada.</b><p class="muted">O serviço será reiniciado após validar e instalar o pacote. Reabra o painel em alguns instantes.</p>'}catch(e){toast(e.message,true)}}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do EPG Stream</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}
@@ -2065,11 +2100,14 @@ async function saveSource(){try{await api('/api/sources',{method:'POST',body:JSO
 function sourceTestMessage(r){const n=r.normalization;if(!n)return `${r.channels} canais e ${r.programmes} programas encontrados`;return `${r.channels} canais e ${r.programmes} programas na janela · ${n.channels_synthesized||0} canais criados · ${n.invalid_programmes_removed||0} eventos inválidos removidos`}
 function syncingSource(name='fonte XMLTV'){modal(`<div class="sync-state"><div class="sync-spinner"></div><div><h2>Sincronizando canais…</h2><p class="muted">Baixando e processando ${esc(name)}. Arquivos grandes podem levar alguns segundos.</p></div></div>`,'source-catalog-modal')}
 function parseReport(n){if(!n)return '<div class="parse-report"><h3>XMLTV padrão</h3><div class="muted">O link foi lido no formato original; nenhuma transformação estrutural foi aplicada.</div></div>';return `<div class="parse-report"><h3>Ajustes aplicados pelo Parse-XML</h3><p>O arquivo do provedor foi convertido para o padrão aceito pelo EPG Stream antes de ser disponibilizado aos emissores.</p><div class="parse-grid"><div><b>${n.channels_synthesized||0}</b><br><small>canais criados</small></div><div><b>${n.timezone_added||0}</b><br><small>horários com UTC−03</small></div><div><b>${n.channel_refs_rewritten||0}</b><br><small>IDs ajustados</small></div><div><b>${n.duplicate_channels_removed||0}</b><br><small>duplicados removidos</small></div><div><b>${n.invalid_programmes_removed||0}</b><br><small>programas inválidos removidos</small></div></div><p class="muted">A cópia normalizada usa URL interna estável e só substitui a anterior depois de validada. Se a origem falhar, a última cópia válida permanece em uso.</p></div>`}
+function parseErrors(n){const errors=n?.invalid_programmes||[];if(!errors.length)return '';return `<details class="parse-errors"><summary>Consultar ${errors.length} programa(s) inválido(s)${n.invalid_programmes_truncated?` · mais ${n.invalid_programmes_truncated} omitidos pelo limite de segurança`:''}</summary><input class="catalog-search" placeholder="Buscar por canal, programa ou motivo" oninput="filterParseErrors(this.value)"><div class="table-wrap"><table class="parse-error-table"><thead><tr><th>Canal</th><th>Programa</th><th>Início/fim recebidos</th><th>Motivo</th></tr></thead><tbody>${errors.map(e=>`<tr class="parse-error-row" data-search="${esc(`${e.channel_id} ${e.title} ${e.reason}`.toLowerCase())}"><td><code>${esc(e.channel_id||'não informado')}</code></td><td>${esc(e.title)}</td><td><code>${esc(e.start||'—')}</code><br><code>${esc(e.stop||'—')}</code></td><td class="error-text">${esc(e.reason)}</td></tr>`).join('')}</tbody></table></div></details>`}
+function filterParseErrors(value){const term=value.trim().toLocaleLowerCase('pt-BR');document.querySelectorAll('.parse-error-row').forEach(row=>row.hidden=!!term&&!row.dataset.search.includes(term))}
 function sourceScheduleRows(items){return (items||[]).map(p=>`<div><time>${new Date(p.start*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</time><b>${esc(p.title||'Sem título')}</b>${p.category?` <span class="badge">${esc(p.category)}</span>`:''}<div class="muted">${esc(p.description||'Sem sinopse')}</div></div>`).join('')||'<div class="muted">Nenhuma programação futura disponível nesta janela.</div>'}
 function toggleSourceSchedule(index){const row=el(`sourceSchedule-${index}`);if(row)row.hidden=!row.hidden}
-function renderSourceCatalog(source,data){const date=new Date(data.fetched_at*1000).toLocaleString('pt-BR');modal(`<div class="guide-head"><div><h2>${esc(source.name)}</h2><div class="muted">${data.channels.length} canais · ${data.programme_count} programas na janela · sincronizado em ${date}</div></div><div class="actions"><button onclick="openSourceCatalog('${esc(source.id)}',true)">Sincronizar novamente</button><button onclick="openSources()">Voltar</button><button onclick="closeModal()">Fechar</button></div></div>${parseReport(data.normalization)}<div class="table-wrap"><table class="source-channel-table"><thead><tr><th>Canal disponível</th><th>ID XMLTV</th><th>Programas</th><th>No ar agora</th><th></th></tr></thead><tbody>${data.channels.map((c,i)=>`<tr><td><b>${esc(c.name)}</b></td><td><code>${esc(c.id)}</code></td><td>${c.programme_count}</td><td>${c.current?`<b>${esc(c.current.title)}</b><div class="muted">${fmt(c.current.start)}–${fmt(c.current.stop)}</div>`:'Sem programa no ar'}</td><td><button onclick="toggleSourceSchedule(${i})">Ver programação</button></td></tr><tr id="sourceSchedule-${i}" hidden><td colspan="5"><div class="source-schedule">${sourceScheduleRows(c.schedule)}</div></td></tr>`).join('')}</tbody></table></div>`,'source-catalog-modal')}
+function filterSourceChannels(value){const term=value.trim().toLocaleLowerCase('pt-BR');document.querySelectorAll('.catalog-channel').forEach(row=>{const hidden=!!term&&!row.dataset.search.includes(term);row.hidden=hidden;if(row.nextElementSibling)row.nextElementSibling.hidden=true})}
+function renderSourceCatalog(source,data){const date=new Date(data.fetched_at*1000).toLocaleString('pt-BR');modal(`<div class="guide-head"><div><h2>${esc(source.name)}</h2><div class="muted">${data.channels.length} canais · ${data.programme_count} programas na janela · sincronizado em ${date}</div></div><div class="actions"><button onclick="openSourceCatalog('${esc(source.id)}',true)">Sincronizar novamente</button><button onclick="openSources()">Voltar</button><button onclick="closeModal()">Fechar</button></div></div>${parseReport(data.normalization)}${parseErrors(data.normalization)}<input class="catalog-search" placeholder="Buscar canal por nome ou ID XMLTV" oninput="filterSourceChannels(this.value)"><div class="table-wrap"><table class="source-channel-table"><thead><tr><th>Canal disponível</th><th>ID XMLTV</th><th>Programas</th><th>No ar agora</th><th></th></tr></thead><tbody>${data.channels.map((c,i)=>`<tr class="catalog-channel" data-search="${esc(`${c.name} ${c.id}`.toLowerCase())}"><td><b>${esc(c.name)}</b></td><td><code>${esc(c.id)}</code></td><td>${c.programme_count}</td><td>${c.current?`<b>${esc(c.current.title)}</b><div class="muted">${fmt(c.current.start)}–${fmt(c.current.stop)}</div>`:'Sem programa no ar'}</td><td><button onclick="toggleSourceSchedule(${i})">Ver programação</button></td></tr><tr id="sourceSchedule-${i}" hidden><td colspan="5"><div class="source-schedule">${sourceScheduleRows(c.schedule)}</div></td></tr>`).join('')}</tbody></table></div>`,'source-catalog-modal')}
 async function openSourceCatalog(id,force=false){const s=sources.find(x=>x.id===id);if(!s)return;syncingSource(s.name);try{const data=await api(`/api/catalog?source_id=${encodeURIComponent(id)}&force=${force?1:0}`);renderSourceCatalog(s,data)}catch(e){modal(`<div class="sync-state"><div><h2 class="error-text">Falha ao sincronizar</h2><p>${esc(e.message)}</p><div class="actions"><button onclick="openSources()">Voltar</button><button class="primary" onclick="openSourceCatalog('${esc(id)}',true)">Tentar novamente</button></div></div></div>`,'source-catalog-modal')}}
-async function testSourceForm(){const request={id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,source_type:el('srcType').value};syncingSource(request.name||'fonte XMLTV');try{const r=await api('/api/sources/test',{method:'POST',body:JSON.stringify(request)});modal(`<div class="guide-head"><h2>Sincronização concluída</h2><button onclick="closeModal()">Fechar</button></div>${parseReport(r.normalization)}<div class="card" style="padding:18px"><b>${esc(sourceTestMessage(r))}</b></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true);editSource(request.id)}}
+async function testSourceForm(){const request={id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,source_type:el('srcType').value};syncingSource(request.name||'fonte XMLTV');try{const r=await api('/api/sources/test',{method:'POST',body:JSON.stringify(request)});modal(`<div class="guide-head"><h2>Sincronização concluída</h2><button onclick="closeModal()">Fechar</button></div>${parseReport(r.normalization)}${parseErrors(r.normalization)}<div class="card" style="padding:18px"><b>${esc(sourceTestMessage(r))}</b></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true);editSource(request.id)}}
 async function testSource(id){await openSourceCatalog(id,true)}
 async function deleteSource(id){if(!confirm('Excluir esta fonte?'))return;try{await api('/api/sources/delete',{method:'POST',body:JSON.stringify({id})});await refresh();openSources()}catch(e){toast(e.message,true)}}
 refresh();setInterval(refresh,15000);
