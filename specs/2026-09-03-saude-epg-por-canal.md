@@ -59,3 +59,10 @@ com agregação visual por portadora e uma central única de erros.
   licença válida e zero reinícios;
 - rollback: `epg-stream-pre-v1.17.1-20260903-124609`;
 - backup: `/srv/epg-stream-backup-pre-v1.17.1-20260903-124609`.
+
+## Correção v1.17.2
+
+- detecta páginas HTML retornadas no lugar de XMLTV e apresenta diagnóstico claro;
+- aplica espera de 60 minutos após falha automática da fonte, evitando consumir
+  repetidamente limites de download do provedor;
+- a sincronização manual continua disponível para teste sob demanda.

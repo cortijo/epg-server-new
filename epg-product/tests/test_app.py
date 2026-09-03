@@ -173,6 +173,8 @@ class EpgProductTests(unittest.TestCase):
         application.license = mock.Mock()
         application.license.check.return_value = {"valid": True}
         application.guides = mock.Mock()
+        application.guides.lock = threading.RLock()
+        application.guides.errors = {}
         application.guides.status.side_effect = [
             {"next_refresh_at": 999}, {"next_refresh_at": 5000},
         ]
@@ -191,6 +193,8 @@ class EpgProductTests(unittest.TestCase):
         application.license = mock.Mock()
         application.license.check.return_value = {"valid": True}
         application.guides = mock.Mock()
+        application.guides.lock = threading.RLock()
+        application.guides.errors = {}
         application.guides.entries = {}
         application.guides.status.return_value = {"next_refresh_at": 5000}
         application.source_sync_stopping = threading.Event()
@@ -198,6 +202,31 @@ class EpgProductTests(unittest.TestCase):
             result = application.sync_due_sources_once()
         self.assertEqual(result["synchronized"], 1)
         application.guides.get.assert_called_once_with({"id": "source-1"}, force=True)
+
+    def test_download_rejects_provider_html_instead_of_xmltv(self):
+        response = mock.MagicMock()
+        response.headers = {"Content-Type": "text/html; charset=UTF-8"}
+        response.read.side_effect = [b"<span>download limit reached</span>", b""]
+        response.__enter__.return_value = response
+        with mock.patch("app.urllib.request.urlopen", return_value=response):
+            with self.assertRaisesRegex(ApiError, "página HTML em vez de XMLTV"):
+                GuideCache.download("https://epg.example/guide.xml")
+
+    def test_background_sync_respects_source_failure_backoff(self):
+        application = object.__new__(Application)
+        application.store = mock.Mock()
+        application.store.snapshot.return_value = {"carriers": [], "sources": [{"id": "limited"}]}
+        application.license = mock.Mock()
+        application.license.check.return_value = {"valid": True}
+        application.guides = mock.Mock()
+        application.guides.lock = threading.RLock()
+        application.guides.errors = {"limited": {"next_retry_at": 5000}}
+        application.guides.status.return_value = None
+        application.source_sync_stopping = threading.Event()
+        with mock.patch("app.time.time", return_value=1000):
+            result = application.sync_due_sources_once()
+        self.assertEqual(result["synchronized"], 0)
+        application.guides.get.assert_not_called()
 
     def test_configuration_backup_restore_round_trip_and_local_safety_copy(self):
         with tempfile.TemporaryDirectory() as directory:
