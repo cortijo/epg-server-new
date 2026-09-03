@@ -216,6 +216,22 @@ Ao editar um canal, a lista do ID XMLTV deve ser obtida da fonte escolhida
 naquele próprio canal. Alterar a fonte padrão não deve substituir escolhas
 individuais já salvas.
 
+### Catálogo de canais da fonte
+
+Desde a v1.15.0, em **Fontes XMLTV**, use **Ver canais e programação** para
+sincronizar e listar todos os canais encontrados. A tabela apresenta o nome,
+ID XMLTV usado na associação, quantidade de programas na janela operacional,
+programa no ar e até 24 entradas atuais/futuras expansíveis por canal.
+
+Durante o download aparece **Sincronizando canais…**. O botão **Sincronizar
+novamente** força uma nova consulta; a abertura comum pode reutilizar por cinco
+minutos o cache já validado.
+
+Para fontes Parse-XML, o painel também detalha o que foi necessário para tornar
+o link aceitável: canais criados, timezone UTC−03:00 incluído, referências de
+IDs ajustadas, duplicidades removidas e programas inválidos descartados. Esse
+relatório é apenas diagnóstico e não altera PIDs ou a emissão multicast.
+
 ### 4.1 Publicações XMLTV versionadas
 
 O módulo **Publicações XMLTV** recebe XML, XMLTV ou GZIP autenticado com limite

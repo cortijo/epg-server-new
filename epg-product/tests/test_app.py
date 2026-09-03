@@ -80,6 +80,33 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("Parse-XML (normalizar provedor)", INDEX_HTML)
         self.assertIn("sourceTestMessage", INDEX_HTML)
 
+    def test_source_catalog_ui_reports_sync_and_parse_adjustments(self):
+        self.assertIn("Ver canais e programação", INDEX_HTML)
+        self.assertIn("Sincronizando canais…", INDEX_HTML)
+        self.assertIn("Ajustes aplicados pelo Parse-XML", INDEX_HTML)
+        self.assertIn("channels_synthesized", INDEX_HTML)
+
+    def test_source_catalog_returns_channel_schedule_and_normalization(self):
+        now = int(datetime.now(timezone.utc).timestamp())
+        guide = {
+            "fetched_at": now, "bytes": 123,
+            "channels": {"sport": {"id": "sport", "name": "Sport", "icon": ""}},
+            "programmes": {"sport": [{"channel_id": "sport", "start": now - 60,
+                                        "stop": now + 600, "title": "Ao vivo",
+                                        "subtitle": "", "description": "Jogo", "category": "Esportes"}]},
+            "normalization": {"channels_synthesized": 1},
+        }
+        application = object.__new__(Application)
+        application.guides = mock.Mock()
+        application.guides.get.return_value = guide
+        application.source = mock.Mock(return_value={"id": "source"})
+        catalog = application.catalog("source", force=True)
+        self.assertEqual(catalog["programme_count"], 1)
+        self.assertEqual(catalog["channels"][0]["current"]["title"], "Ao vivo")
+        self.assertEqual(len(catalog["channels"][0]["schedule"]), 1)
+        self.assertEqual(catalog["normalization"]["channels_synthesized"], 1)
+        application.guides.get.assert_called_once_with({"id": "source"}, True)
+
     def test_about_and_update_ui_are_available(self):
         self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)
         self.assertIn("Developed by Julio Cortijo", INDEX_HTML)
