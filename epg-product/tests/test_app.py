@@ -97,6 +97,10 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("channels_synthesized", INDEX_HTML)
         self.assertIn("Buscar canal por nome ou ID XMLTV", INDEX_HTML)
         self.assertIn("Consultar ${errors.length} programa(s) inválido(s)", INDEX_HTML)
+        self.assertIn("CANAIS SINCRONIZADOS", INDEX_HTML)
+        self.assertIn("PROGRAMAS SINCRONIZADOS", INDEX_HTML)
+        self.assertIn("ÚLTIMA ATUALIZAÇÃO", INDEX_HTML)
+        self.assertIn("PRÓXIMA ATUALIZAÇÃO", INDEX_HTML)
 
     def test_source_catalog_returns_channel_schedule_and_normalization(self):
         now = int(datetime.now(timezone.utc).timestamp())
@@ -114,6 +118,9 @@ class EpgProductTests(unittest.TestCase):
         application.source = mock.Mock(return_value={"id": "source"})
         catalog = application.catalog("source", force=True)
         self.assertEqual(catalog["programme_count"], 1)
+        self.assertEqual(catalog["channel_count"], 1)
+        self.assertEqual(catalog["next_refresh_at"], now + 300)
+        self.assertEqual(catalog["cache_seconds"], 300)
         self.assertEqual(catalog["channels"][0]["current"]["title"], "Ao vivo")
         self.assertEqual(len(catalog["channels"][0]["schedule"]), 1)
         self.assertEqual(catalog["normalization"]["channels_synthesized"], 1)
