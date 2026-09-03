@@ -1,7 +1,7 @@
 # Spec: backup e restauração das configurações
 
 - ID: `2026-09-03-backup-restore-configuracoes`
-- Estado: `v1.16.1 em validação`
+- Estado: `v1.16.1 concluído e implantado`
 - Responsável: `Codex`
 - Solicitante: `Julio Cortijo`
 
@@ -66,3 +66,13 @@ recursiva. O pacote é sensível e deve ser armazenado com acesso restrito.
 - backup: `/srv/epg-stream-backup-pre-v1.16.0-20260903-074830`;
 - rollback: `epg-stream-pre-v1.16.0-20260903-074830`;
 - endpoint de backup confirmou autenticação obrigatória sem alterar dados reais.
+
+## Produção v1.16.1
+
+- imagem ativa: `epgserver:v1.16.1-20260903`;
+- container saudável, licença válida, 27 emissores e zero reinícios;
+- backup integral real gerado com 43 MiB, 53 arquivos e 5 XML;
+- pacote conferido com `manifest.json`, configuração, XMLTV, diagnósticos,
+  logotipos e demais arquivos persistentes;
+- backup de implantação: `/srv/epg-stream-backup-pre-v1.16.1-20260903-080230`;
+- rollback: `epg-stream-pre-v1.16.1-20260903-080230`.
