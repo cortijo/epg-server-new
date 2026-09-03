@@ -56,6 +56,35 @@ class EpgProductTests(unittest.TestCase):
             second = cache.get(source, force=True)
         self.assertIs(second, first)
 
+    def test_guide_cache_exposes_source_list_sync_status(self):
+        source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml"})
+        payload = b'''<tv><channel id="sport"><display-name>Sport</display-name></channel>
+          <programme channel="sport" start="20260902000000 -0300" stop="20260902010000 -0300"><title>Jogo</title></programme></tv>'''
+        cache = GuideCache()
+        with mock.patch.object(cache, "download", return_value=payload), \
+                mock.patch("app.time.time", return_value=1000):
+            cache.get(source, force=True)
+        self.assertEqual(cache.status(source), {
+            "channel_count": 1, "programme_count": 1,
+            "fetched_at": 1000, "next_refresh_at": 1300,
+        })
+
+    def test_guide_cache_sync_status_survives_restart_without_source_url(self):
+        source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml"})
+        payload = b'''<tv><channel id="sport"><display-name>Sport</display-name></channel>
+          <programme channel="sport" start="20260902000000 -0300" stop="20260902010000 -0300"><title>Jogo</title></programme></tv>'''
+        with tempfile.TemporaryDirectory() as directory:
+            cache = GuideCache(Path(directory))
+            with mock.patch.object(cache, "download", return_value=payload), \
+                    mock.patch("app.time.time", return_value=1000):
+                cache.get(source, force=True)
+            status = GuideCache(Path(directory)).status(source)
+            self.assertEqual(status["channel_count"], 1)
+            self.assertEqual(status["programme_count"], 1)
+            status_files = list(Path(directory).glob("*.status.json"))
+            self.assertEqual(len(status_files), 1)
+            self.assertNotIn("provider", status_files[0].read_text(encoding="utf-8"))
+
     def test_parse_xml_cache_survives_application_restart(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
                                   "source_type": "parse_xml"})
@@ -101,6 +130,8 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("PROGRAMAS SINCRONIZADOS", INDEX_HTML)
         self.assertIn("ÚLTIMA ATUALIZAÇÃO", INDEX_HTML)
         self.assertIn("PRÓXIMA ATUALIZAÇÃO", INDEX_HTML)
+        self.assertIn("sourceSyncSummary", INDEX_HTML)
+        self.assertIn("Ainda não sincronizada nesta instalação", INDEX_HTML)
 
     def test_source_catalog_returns_channel_schedule_and_normalization(self):
         now = int(datetime.now(timezone.utc).timestamp())

@@ -11,6 +11,9 @@ Exibir na validação de cada fonte XMLTV os totais sincronizados de canais e
 programas, a data da última atualização válida e a data a partir da qual uma
 nova consulta renovará o cache.
 
+Os mesmos indicadores também devem aparecer diretamente na listagem
+**Fontes XMLTV**, ao lado das ações de cada fonte.
+
 ## Requisitos
 
 - [x] Retornar pela API o total de canais e programas da cópia validada.
@@ -18,6 +21,8 @@ nova consulta renovará o cache.
 - [x] Exibir os quatro indicadores de forma legível no desktop e no celular.
 - [x] Atualizar os indicadores após sincronização manual.
 - [x] Preservar Parse-XML, diagnósticos, emissores, PIDs e multicast.
+- [x] Mostrar o resumo na listagem principal de fontes, sem exigir abrir o
+  catálogo.
 
 ## Contrato
 
@@ -41,14 +46,14 @@ próxima consulta ou imediatamente com `force=1`.
 
 ## Registro de execução
 
-- 64 testes Python aprovados; 5 testes de shell ignorados pela ausência do Bash
+- 66 testes Python aprovados; 5 testes de shell ignorados pela ausência do Bash
   no Windows;
 - compilação Python, JavaScript embarcado e `git diff --check` aprovados;
-- imagem `epgserver:v1.15.2-candidate` construída com sucesso;
-- produção promovida para `epgserver:v1.15.2-20260902`, com 27 emissores,
+- imagem `epgserver:v1.15.3-candidate` construída com sucesso;
+- produção promovida para `epgserver:v1.15.3-20260902`, com 27 emissores,
   zero reinícios e zero erros críticos após o deploy;
 - tentativa de validação visual automatizada pelo navegador foi bloqueada pela
   política local para IP/porta e localhost encaminhado; layout responsivo e
   textos foram cobertos por teste automatizado, sem alegar inspeção visual;
-- rollback `epg-stream-v1151-rollback-20260902` e backup
-  `/srv/backups/epg-stream-before-v1152-20260902.tar.gz` preservados.
+- rollback `epg-stream-v1152-rollback-20260902` e backup
+  `/srv/backups/epg-stream-before-v1153-20260902.tar.gz` preservados.
