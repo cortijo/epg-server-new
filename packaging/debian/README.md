@@ -14,13 +14,13 @@ sudo apt install -y build-essential dpkg-dev pkg-config \
 ./packaging/debian/build-deb.sh
 ```
 
-O artefato é criado em `dist/epg-stream_1.16.1-1_ARCH.deb`. Compile uma vez em
+O artefato é criado em `dist/epg-stream_1.17.0-1_ARCH.deb`. Compile uma vez em
 `amd64` e outra em `arm64` para publicar as duas arquiteturas.
 
 ## Instalação no cliente
 
 ```bash
-sudo apt install ./epg-stream_1.16.1-1_amd64.deb
+sudo apt install ./epg-stream_1.17.0-1_amd64.deb
 sudo epg-stream-configure
 ```
 
