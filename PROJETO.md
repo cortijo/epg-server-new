@@ -81,8 +81,8 @@ renovação do cache, persistindo o resumo após reinícios. Na v1.15.4, um work
 sincroniza em background todas as fontes vencidas a cada
 60 minutos, somente com licença válida e mantendo a última cópia quando a
 origem falha. O deploy preservou 27 emissores, licença válida e zero reinícios.
-O cliente `187.19.16.59` permanece na linha
-v1.13.1 até uma promoção explicitamente autorizada.
+O cliente `187.19.16.59` foi promovido para a v1.17.2 em 04/09/2026,
+preservando o container v1.13.1 e uma cópia integral dos dados para rollback.
 
 Host operacional conhecido: `181.233.106.46`.
 
@@ -111,11 +111,13 @@ retornarem HTTP 402. Após revalidação, os fluxos elegíveis retomam. O painel
 também possui **Reiniciar todos os fluxos**. A autoridade permanece na v1.1 e a
 licença ativa continua em `key_version=2`.
 
-Uma instalação cliente adicional em `187.19.16.59` foi promovida em 28/08/2026
-para `epgserver:v1.13.1-20260828`. Ela valida automaticamente a licença a cada
-43200 segundos, opera com cinco portadoras/dez canais e preserva rollback em
-`epg-stream-pre-v1.13.1-20260828-104421`. A v1.12.1 também garante uma primeira
-consulta real mesmo quando o uptime do host ainda é menor que o intervalo.
+Uma instalação cliente adicional em `187.19.16.59` executa
+`epgserver:v1.17.2-20260904`. Ela valida automaticamente a licença a cada 43200
+segundos, opera com 17 portadoras/52 canais e preserva rollback em
+`epg-stream-pre-v1.17.2-20260904-152850`, além do backup integral
+`/srv/epg-stream-backup-pre-v1.17.2-20260904-152850`. O multicast foi confirmado
+na interface `ens19`, de `10.10.10.20` para `239.192.15.1:5012`, em datagramas
+de 1316 bytes e sem descarte pelo kernel na amostra pós-deploy.
 
 ### 2.3 Candidato validado e isolado
 

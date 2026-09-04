@@ -71,3 +71,14 @@ com agregação visual por portadora e uma central única de erros.
   licença válida, rede host, 27 emissores e zero reinícios;
 - rollback: `epg-stream-pre-v1.17.2-20260903-160251`;
 - backup: `/srv/epg-stream-backup-pre-v1.17.2-20260903-160251`.
+
+### Implantação no cliente em 04/09/2026
+
+- `187.19.16.59` promovido de `epgserver:v1.13.1-20260828` para
+  `epgserver:v1.17.2-20260904`;
+- licença válida, 17 emissores, 52 canais, rede host e zero reinícios;
+- saída real confirmada em `ens19` para `239.192.15.1:5012`, com datagramas de
+  1316 bytes e zero pacotes descartados na captura;
+- rollback: `epg-stream-pre-v1.17.2-20260904-152850`;
+- backup integral de 383 MB:
+  `/srv/epg-stream-backup-pre-v1.17.2-20260904-152850`.
