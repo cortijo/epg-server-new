@@ -886,7 +886,8 @@ struct EpgInjector::Impl {
           civilShiftSeconds(effectiveCivilShiftSeconds(
               profile, utcOffsetMinutes, correctionSeconds)),
           transportStreamId(static_cast<std::uint16_t>(config.epgTransportStreamId)),
-          originalNetworkId(static_cast<std::uint16_t>(config.epgOriginalNetworkId)) {
+          originalNetworkId(static_cast<std::uint16_t>(config.epgOriginalNetworkId)),
+          eitVersion(static_cast<std::uint8_t>(config.epgSignalVersion & 0x1F)) {
         audit.configured = config.epgEnabled;
         audit.active = active;
         audit.profile = profile == EpgProfile::IsdbTb ? "isdbtb" : "generic";

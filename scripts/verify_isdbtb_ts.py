@@ -167,6 +167,9 @@ def validate(path, expected_services, expected_tsid, expected_onid,
     cdt_download_ids = set()
     logo_cdts = []
     logo_cdt_keys = set()
+    pat_versions = set()
+    pmt_versions = set()
+    eit_versions = set()
     sdt_versions = set()
     bit_versions = set()
     bit_onids = set()
@@ -186,6 +189,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                 crc_errors_by_table[table_id] += 1
             if 0x4E <= table_id <= 0x6F and len(section) >= 18:
                 eit_tables[table_id] += 1
+                eit_versions.add((section[5] >> 1) & 0x1F)
                 service = (section[3] << 8) | section[4]
                 tsid = (section[8] << 8) | section[9]
                 onid = (section[10] << 8) | section[11]
@@ -273,6 +277,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                         }
                     event_offset = descriptor_end
             elif table_id == 0x00 and len(section) >= 12:
+                pat_versions.add((section[5] >> 1) & 0x1F)
                 tsid = (section[3] << 8) | section[4]
                 programs = []
                 for offset in range(8, len(section) - 4, 4):
@@ -283,6 +288,7 @@ def validate(path, expected_services, expected_tsid, expected_onid,
                     id_errors += 1
                     id_error_details.append(f"PAT TSID/programas={tsid}/{programs}")
             elif table_id == 0x02 and len(section) >= 12:
+                pmt_versions.add((section[5] >> 1) & 0x1F)
                 program = (section[3] << 8) | section[4]
                 if program not in expected_services:
                     id_errors += 1
@@ -466,7 +472,10 @@ def validate(path, expected_services, expected_tsid, expected_onid,
         "logo_descriptors": logo_descriptors,
         "cdt_download_data_ids": sorted(cdt_download_ids),
         "logo_cdts": logo_cdts,
+        "pat_versions": sorted(pat_versions),
+        "pmt_versions": sorted(pmt_versions),
         "sdt_versions": sorted(sdt_versions),
+        "eit_versions": sorted(eit_versions),
         "bit_versions": sorted(bit_versions),
         "bit_onids": sorted(bit_onids),
         "bit_broadcasters": bit_broadcasters,

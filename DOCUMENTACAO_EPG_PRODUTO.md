@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada para a entrega: **1.13.1**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.17.3**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -47,6 +47,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.12.x | bloqueio integral sem licença, reinício global e correção da sinopse EIT |
 | 1.13.0 | simulador de receptor ISDB-TB com captura não intrusiva do TS gerado |
 | 1.13.1 | `0x4D` leva somente o título e `0x4E` leva toda a sinopse no perfil ISDB-TB |
+| 1.17.3 | PAT/PMT/SDT/BIT/EIT recebem versão persistente para invalidar cache após restart |
 
 Tags são imutáveis. Uma correção posterior deve gerar nova versão; nunca mova
 uma tag existente nem publique outra imagem com a mesma tag.
@@ -163,8 +164,9 @@ Regras:
 - TSID e ONID representam o multiplex final;
 - o PID base de PMT ocupa uma sequência: base, base + 1 etc.;
 - uma fonte usada não pode ser excluída;
-- `signalling_version` é controlado pelo servidor e avança módulo 32 quando o
-  logo muda, para invalidar a sinalização em cache no receptor;
+- `signalling_version` é controlado pelo servidor e avança módulo 32 antes de
+  cada início/reinício da portadora e quando o logo muda, para invalidar a
+  sinalização em cache no mux e no receptor;
 - IDs persistentes não são reciclados durante clonagem;
 - `/api/state` omite URLs XMLTV; `/api/sources` é autenticado e permite edição.
 
@@ -286,6 +288,12 @@ O agregador nunca intercala pacotes de duas seções EIT. A continuidade é
 reescrita globalmente por PID após combinar serviços. Detalhes de descritores,
 codificação, segmentação, CRC e horários estão em
 [`ARQUITETURA_EPG_MULTICAST_ISDBTB.md`](ARQUITETURA_EPG_MULTICAST_ISDBTB.md).
+
+PAT, PMT, SDT, BIT e a versão inicial da EIT compartilham a versão persistente
+da portadora. O emissor ainda avança a versão da EIT quando o fingerprint da
+programação muda em execução. Cadastrar o input no Dexing pode exigir o
+primeiro **Parse Program**, mas reinícios posteriores não devem depender dessa
+operação para que uma EIT nova substitua a tabela em cache.
 
 Cada evento pode transportar o descritor de conteúdo `0x54`. O emissor usa a
 primeira categoria XMLTV reconhecida e, na ausência dela, o campo

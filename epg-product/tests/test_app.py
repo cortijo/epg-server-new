@@ -510,6 +510,47 @@ class EpgProductTests(unittest.TestCase):
         with self.assertRaises(ApiError):
             validate_carrier({**base, "clock_mode": "congelado"})
 
+    def test_start_advances_and_persists_signal_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "epg-product.json")
+            source = {"id": "source", "name": "Fonte",
+                      "url": "https://example.test/guide.xml", "is_default": True}
+            carrier = validate_carrier({
+                "id": "carrier-version", "name": "Portadora versionada",
+                "source_id": "source", "destination": "239.192.1.220", "port": 5012,
+                "interface_address": "10.0.0.10",
+                "services": [{"name": "Canal", "epg_channel_id": "canal.br",
+                              "service_id": 101}],
+            })
+            carrier["signalling_version"] = 31
+            store.data["sources"] = [source]
+            store.data["carriers"] = [carrier]
+            store.save()
+            license_manager = mock.MagicMock()
+            supervisor = Supervisor(
+                store, "/bin/false", Path(directory) / "logs", license_manager)
+            process = mock.MagicMock()
+            process.pid = 1234
+            process.poll.return_value = None
+            with mock.patch("app.subprocess.Popen", return_value=process) as popen:
+                supervisor._start_locked(store.snapshot()["carriers"][0])
+            license_manager.require.assert_called_once_with(1)
+            environment = popen.call_args.kwargs["env"]
+            self.assertEqual(environment["EPG_SIGNAL_VERSION"], "0")
+            self.assertEqual(store.snapshot()["carriers"][0]["signalling_version"], 0)
+            supervisor._stop_locked("carrier-version")
+
+    def test_epg_injector_uses_persistent_signal_version(self):
+        root = Path(__file__).resolve().parents[2]
+        injector = (root / "src" / "EpgInjector.cpp").read_text(encoding="utf-8")
+        emitter = (root / "src" / "EpgOnlyMain.cpp").read_text(encoding="utf-8")
+        self.assertIn("config.epgSignalVersion & 0x1F", injector)
+        self.assertIn("config.epgSignalVersion = carrier.signalVersion", emitter)
+        self.assertIn("makePatSection(config.transportStreamId, config.services, pmtPid,", emitter)
+        self.assertIn("makePmtSection(service.serviceId, config.signalVersion)", emitter)
+        auditor = (root / "scripts" / "verify_isdbtb_ts.py").read_text(encoding="utf-8")
+        self.assertIn('"eit_versions": sorted(eit_versions)', auditor)
+
     def test_channel_category_fallback_is_validated_and_rendered(self):
         carrier = validate_carrier({
             "name": "Portadora esporte", "source_id": "source",

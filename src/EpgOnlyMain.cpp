@@ -171,10 +171,12 @@ struct EpgOnlyConfiguration {
 
 std::vector<std::uint8_t> makePatSection(std::uint16_t transportStreamId,
                                          const std::vector<EpgService>& services,
-                                         std::uint16_t pmtPid) {
+                                         std::uint16_t pmtPid,
+                                         std::uint8_t signalVersion) {
     std::vector<std::uint8_t> section {0x00, 0xB0, 0x00};
     append16(section, transportStreamId);
-    section.insert(section.end(), {0xC1, 0x00, 0x00});
+    section.insert(section.end(), {
+        static_cast<std::uint8_t>(0xC1 | ((signalVersion & 0x1F) << 1)), 0x00, 0x00});
     for (std::size_t index = 0; index < services.size(); ++index) {
         append16(section, services[index].serviceId);
         const auto servicePmtPid = static_cast<std::uint16_t>(pmtPid + index);
@@ -185,10 +187,12 @@ std::vector<std::uint8_t> makePatSection(std::uint16_t transportStreamId,
     return section;
 }
 
-std::vector<std::uint8_t> makePmtSection(std::uint16_t serviceId) {
+std::vector<std::uint8_t> makePmtSection(std::uint16_t serviceId,
+                                         std::uint8_t signalVersion) {
     std::vector<std::uint8_t> section {0x02, 0xB0, 0x00};
     append16(section, serviceId);
-    section.insert(section.end(), {0xC1, 0x00, 0x00});
+    section.insert(section.end(), {
+        static_cast<std::uint8_t>(0xC1 | ((signalVersion & 0x1F) << 1)), 0x00, 0x00});
     // The auxiliary service carries no elementary streams and therefore has
     // no PCR.  PID 0x1FFF is the standards-defined no-PCR value.
     section.insert(section.end(), {0xFF, 0xFF, 0xF0, 0x00});
@@ -330,11 +334,12 @@ class SignallingCarousel {
 public:
     SignallingCarousel(const EpgOnlyConfiguration& config, std::uint16_t pmtPid)
         : pmtPid_(pmtPid),
-          pat_(makePatSection(config.transportStreamId, config.services, pmtPid)),
+          pat_(makePatSection(config.transportStreamId, config.services, pmtPid,
+                              config.signalVersion)),
           sdt_(makeSdtSection(config.transportStreamId, config.originalNetworkId,
                               config.services, config.signalVersion)) {
         for (const auto& service : config.services) {
-            pmts_.push_back(makePmtSection(service.serviceId));
+            pmts_.push_back(makePmtSection(service.serviceId, config.signalVersion));
             pmtContinuities_.push_back(0);
             for (const auto& asset : service.logoAssets) {
                 cdts_.push_back(makeCdtSection(config.originalNetworkId, service, asset));
@@ -512,6 +517,7 @@ StreamConfig injectorConfiguration(const EpgOnlyConfiguration& carrier,
     config.serviceId = service.serviceId;
     config.epgTransportStreamId = carrier.transportStreamId;
     config.epgOriginalNetworkId = carrier.originalNetworkId;
+    config.epgSignalVersion = carrier.signalVersion;
     return config;
 }
 

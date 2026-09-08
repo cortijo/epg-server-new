@@ -49,7 +49,7 @@ o candidato e a produção estejam na mesma versão.
 
 - implementação Parse-XML: `b4001f5`;
 - tag prevista para o estado final documentado: `epg-v1.17.2`;
-- `PRODUCT_VERSION`: `1.17.2`;
+- `PRODUCT_VERSION`: `1.17.3`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
@@ -265,6 +265,12 @@ Uma portadora possui, entre outros:
 - `pmt_pid`, `bitrate`, `ttl` e `signalling_version`;
 - modo, fuso e correção do relógio;
 - lista `services`.
+
+`signalling_version` avança módulo 32 e é persistido antes de cada nova
+geração do emissor. PAT, PMT, SDT, BIT e a versão inicial da EIT usam esse
+mesmo valor. Assim, reinícios e alterações de canais invalidam o cache PSI/SI
+do mux/receptor; durante a execução, mudanças reais da grade continuam
+incrementando a EIT independentemente.
 
 Cada serviço/canal possui:
 
@@ -699,6 +705,7 @@ tail -n 200 /srv/epg-stream/logs/ID_DA_PORTADORA.log
 | 1.12.2 | elimina repetição entre os descritores EIT `0x4D` e `0x4E` e adiciona auditoria de sobreposição |
 | 1.13.0 | simulador de TV/PIDs captura o TS gerado sem interromper o multicast e reconstrói os metadados EIT |
 | 1.13.1 | separa título no `0x4D` e sinopse integral no `0x4E` para evitar quebra criada pelo receptor |
+| 1.17.3 | versionamento PSI/SI persistente evita EIT antiga em cache após reinício |
 
 As specs em `specs/` contêm o histórico detalhado de decisões e evidências.
 

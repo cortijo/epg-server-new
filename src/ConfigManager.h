@@ -86,6 +86,9 @@ struct StreamConfig {
     std::string epgMode = "generic";
     uint32_t epgTransportStreamId = 1;
     uint32_t epgOriginalNetworkId = 1;
+    // Initial MPEG-TS PSI/SI version used by the EPG-only emitter. The
+    // supervisor persists and advances it across process restarts.
+    uint32_t epgSignalVersion = 0;
     std::string epgSourceId = "braziltvepg";
     std::string epgSourceUrl = "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml";
     std::string epgChannelId;
