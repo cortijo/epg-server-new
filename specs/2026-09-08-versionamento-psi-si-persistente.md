@@ -1,7 +1,7 @@
 # Spec: versionamento PSI/SI persistente após reinício
 
 - ID: `2026-09-08-versionamento-psi-si-persistente`
-- Estado: `validando`
+- Estado: `concluída`
 - Responsável: Codex
 - Solicitante: Julio Cortijo
 - Criada em: 2026-09-08
@@ -42,7 +42,7 @@ nova geração do processo, sendo compartilhada por PAT, PMT, SDT, BIT e EIT.
   versão anterior.
 - [x] CA-03 — PAT, PMT, SDT, BIT e EIT anunciam a versão reservada.
 - [x] CA-04 — Captura isolada passa CRC, continuidade, IDs, EIT e relógio.
-- [ ] CA-05 — Os dois servidores mantêm health, licença, processos e multicast.
+- [x] CA-05 — Os dois servidores mantêm health, licença, processos e multicast.
 
 ## 6. Desenho técnico
 
@@ -70,7 +70,7 @@ Arquivos: `epg-product/app.py`, `src/ConfigManager.h`,
 | T-02 | build Docker | C++ compila | passou |
 | T-03 | captura TS isolada | auditor sem erros e versões coerentes | passou |
 | T-04 | restart isolado | versão muda e persiste | passou |
-| T-05 | produção nos dois hosts | health/processos/multicast normais | pendente |
+| T-05 | produção nos dois hosts | health/processos/multicast normais | passou |
 
 Imagem prevista: `epgserver:v1.17.3-20260908`. Cada host receberá backup novo
 e manterá o container/imagem anterior parado para rollback.
@@ -88,8 +88,18 @@ serão restaurados se uma inconsistência for comprovada.
 | 2026-09-08 | diagnóstico | emissão ativa; EIT reutilizava versão zero após restart |
 | 2026-09-08 | testes | 78 testes EPG e 3 de licença passaram; 5 de firewall ignorados no Windows sem Bash |
 | 2026-09-08 | captura isolada | versão 7 e depois 8; PAT/PMT/SDT/EIT=8, CRC e continuidade sem erros |
+| 2026-09-08 | deploy 187.19.16.59 | v1.17.3, licença válida, 17 emissores, 50 canais, zero restarts e UDP/1316 bytes confirmado |
+| 2026-09-08 | deploy 181.233.106.46 | v1.17.3, licença válida, 27 emissores, 52 canais, zero restarts; EIT versão 2 e UDP/1316 bytes confirmados |
 
 ## 11. Resultado final
 
-- Estado final: em andamento
-- Commit/tag/imagem/rollback: a preencher após validação e implantação
+- Estado final: concluído
+- Critérios de aceite: 5/5
+- Commit da implementação: `a1be953`
+- Imagem implantada: `epgserver:v1.17.3-20260908`
+- Rollback 181.233.106.46: container
+  `epg-stream-pre-v1.17.3-20260908-163731` e backup
+  `/srv/epg-stream-backup-pre-v1.17.3-20260908-163731`
+- Rollback 187.19.16.59: container
+  `epg-stream-pre-v1.17.3-20260908-163449` e backup
+  `/srv/epg-stream-backup-pre-v1.17.3-20260908-163449`

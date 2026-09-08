@@ -67,8 +67,8 @@ git remote -v
 
 ### 2.2 Produção ativa
 
-Em 02/09/2026 o host principal `181.233.106.46` foi atualizado para
-`epgserver:v1.17.2-20260903`. Além das correções anteriores de EIT, simulador e
+Em 08/09/2026 o host principal `181.233.106.46` foi atualizado para
+`epgserver:v1.17.3-20260908`. Além das correções anteriores de EIT, simulador e
 atualização segura, essa versão oferece fontes **Parse-XML**: normaliza fontes
 sem `<channel>`, completa timezone, elimina eventos inválidos e mantém uma URL
 interna estável com a última cópia válida. A v1.15.0 acrescenta o catálogo de
@@ -81,14 +81,14 @@ renovação do cache, persistindo o resumo após reinícios. Na v1.15.4, um work
 sincroniza em background todas as fontes vencidas a cada
 60 minutos, somente com licença válida e mantendo a última cópia quando a
 origem falha. O deploy preservou 27 emissores, licença válida e zero reinícios.
-O cliente `187.19.16.59` foi promovido para a v1.17.2 em 04/09/2026,
-preservando o container v1.13.1 e uma cópia integral dos dados para rollback.
+O cliente `187.19.16.59` foi promovido para a v1.17.3 em 08/09/2026,
+preservando o container v1.17.2 e uma cópia integral dos dados para rollback.
 
 Host operacional conhecido: `181.233.106.46`.
 
 | Item | Estado confirmado |
 |---|---|
-| EPG | `epg-stream`, imagem `epgserver:v1.17.2-20260903` |
+| EPG | `epg-stream`, imagem `epgserver:v1.17.3-20260908` |
 | Licenças | `epg-license-server`, imagem `epg-license-server:v1.1.0-20260826` |
 | HTTP EPG | TCP `9100`, rede Docker `host` |
 | HTTP licenças | TCP `9200`, acesso limitado pelo firewall às redes autorizadas |
@@ -97,11 +97,11 @@ Host operacional conhecido: `181.233.106.46`.
 | Chave do cliente | volume `epg-license-client-secret` |
 | Segredo mestre v2 | volume `epg-license-master-secret`, modo `0600`, UID/GID 10002 |
 | Emissores | 27 processos `TVStreamEpgOnly` |
-| Canais licenciados | 63 de 100 na validação de 02/09/2026 |
+| Canais licenciados | 52 de 100 na validação de 08/09/2026 |
 | Reinícios dos containers ativos | zero |
-| Rollback EPG imediato | `epg-stream-pre-v1.17.2-20260903-160251` (imagem v1.17.1, parado) |
+| Rollback EPG imediato | `epg-stream-pre-v1.17.3-20260908-163731` (imagem v1.17.2, parado) |
 | Rollback licenças imediato | `epg-license-server-pre-v1.1.0-20260827-073708` |
-| Backup EPG | `/srv/epg-stream-backup-pre-v1.17.2-20260903-160251` |
+| Backup EPG | `/srv/epg-stream-backup-pre-v1.17.3-20260908-163731` |
 | Backup autoridade | `epg-license-data-backup-pre-v1.1.0-20260827-073708` |
 | Backup chave cliente | `epg-license-client-backup-pre-v1.11.0-20260827-073708` |
 
@@ -112,10 +112,10 @@ também possui **Reiniciar todos os fluxos**. A autoridade permanece na v1.1 e a
 licença ativa continua em `key_version=2`.
 
 Uma instalação cliente adicional em `187.19.16.59` executa
-`epgserver:v1.17.2-20260904`. Ela valida automaticamente a licença a cada 43200
-segundos, opera com 17 portadoras/52 canais e preserva rollback em
-`epg-stream-pre-v1.17.2-20260904-152850`, além do backup integral
-`/srv/epg-stream-backup-pre-v1.17.2-20260904-152850`. O multicast foi confirmado
+`epgserver:v1.17.3-20260908`. Ela valida automaticamente a licença a cada 43200
+segundos, opera com 17 portadoras/50 canais e preserva rollback em
+`epg-stream-pre-v1.17.3-20260908-163449`, além do backup integral
+`/srv/epg-stream-backup-pre-v1.17.3-20260908-163449`. O multicast foi confirmado
 na interface `ens19`, de `10.10.10.20` para `239.192.15.1:5012`, em datagramas
 de 1316 bytes e sem descarte pelo kernel na amostra pós-deploy.
 
