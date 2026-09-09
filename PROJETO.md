@@ -49,7 +49,7 @@ o candidato e a produção estejam na mesma versão.
 
 - implementação Parse-XML: `b4001f5`;
 - tag prevista para o estado final documentado: `epg-v1.17.2`;
-- `PRODUCT_VERSION`: `1.18.2`;
+- `PRODUCT_VERSION`: `1.18.3`;
 
 ### Implantação v1.18.0 — 09/09/2026
 
