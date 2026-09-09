@@ -1,0 +1,19 @@
+services:
+  modulator-recorder:
+    image: omniepg-modulator-recorder:v1.0.1
+    container_name: omniepg-modulator-recorder
+    restart: "no"
+    ports:
+      - "127.0.0.1:9323:6080"
+    environment:
+      RECORDER_TARGET_URL: "https://10.42.0.152/"
+      RECORDER_PASSWORD: "change-me"
+    volumes:
+      - /home/usuario/omniepg-modulator-recorder:/recordings
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    group_add:
+      - "1000"
