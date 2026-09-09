@@ -59,6 +59,15 @@ HTTP `9100`. A licença permaneceu válida (51/100 canais) e foram confirmados 2
 processos emissores após a troca. O rollback imediato ficou preservado como
 `epg-stream-pre-v1.18.0-20260909`, usando a imagem v1.17.3. O host
 `187.19.16.59` não foi alterado nesta implantação.
+
+### Implantação v1.18.3 — 09/09/2026
+
+O hotfix da grade não bloqueante e do visual padrão foi promovido nos hosts
+`181.233.106.46` e `187.19.16.59`. No cliente `187.19.16.59`, a imagem ativa é
+`epgserver:v1.18.3-20260909`, em rede host e porta 9100; a licença EloNET permaneceu
+válida (50/100 canais), 17 emissores foram confirmados e o rollback imediato ficou
+em `epg-stream-pre-v1.18.3-20260909` com a imagem v1.17.3. Foram preservados o
+intervalo de licença de 43200 segundos e o servidor de chaves remoto.
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
