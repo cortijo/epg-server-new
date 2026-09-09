@@ -704,6 +704,12 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("delete guideCache[id]", INDEX_HTML)
         self.assertNotIn("function loadNow()", INDEX_HTML)
 
+    def test_operational_layout_has_sidebar_metrics_and_filters(self):
+        self.assertIn('class="app-rail"', INDEX_HTML)
+        self.assertIn('id="carrierFilter"', INDEX_HTML)
+        self.assertIn("function filterCarriers()", INDEX_HTML)
+        self.assertIn("function setCarrierFilter(button,status)", INDEX_HTML)
+
     def test_carrier_clone_is_safe_and_requires_new_destination(self):
         self.assertIn("function cloneCarrier(id)", INDEX_HTML)
         self.assertIn(">Clonar</button>", INDEX_HTML)
