@@ -1,5 +1,6 @@
 import json
 import io
+import inspect
 import tarfile
 import tempfile
 import threading
@@ -721,6 +722,7 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("function renderTimeline(g)", INDEX_HTML)
         self.assertIn("const TIMELINE_STEP=2*3600", INDEX_HTML)
         self.assertIn('/api/guides?start=', INDEX_HTML)
+        self.assertIn("cached or self.guides.get", inspect.getsource(Application.all_guides))
         self.assertIn('id="timelineCategory"', INDEX_HTML)
         self.assertIn('id="timelineChannelSearch"', INDEX_HTML)
         self.assertIn('id="timelineProgramSearch"', INDEX_HTML)
