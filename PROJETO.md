@@ -50,6 +50,15 @@ o candidato e a produção estejam na mesma versão.
 - implementação Parse-XML: `b4001f5`;
 - tag prevista para o estado final documentado: `epg-v1.17.2`;
 - `PRODUCT_VERSION`: `1.18.0`;
+
+### Implantação v1.18.0 — 09/09/2026
+
+A grade geral de programação foi implantada somente no host `181.233.106.46`,
+container `epg-stream`, imagem `epgserver:v1.18.0-20260909`, rede `host` e porta
+HTTP `9100`. A licença permaneceu válida (51/100 canais) e foram confirmados 27
+processos emissores após a troca. O rollback imediato ficou preservado como
+`epg-stream-pre-v1.18.0-20260909`, usando a imagem v1.17.3. O host
+`187.19.16.59` não foi alterado nesta implantação.
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;
