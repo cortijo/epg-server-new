@@ -712,6 +712,8 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("Nova portadora", INDEX_HTML)
         self.assertIn("Central de erros", INDEX_HTML)
         self.assertIn("carrier?.services", INDEX_HTML)
+        self.assertIn(".modal-back{left:224px", INDEX_HTML)
+        self.assertIn(".modal.timeline-modal{width:calc(100vw - 256px)", INDEX_HTML)
 
     def test_carrier_clone_is_safe_and_requires_new_destination(self):
         self.assertIn("function cloneCarrier(id)", INDEX_HTML)

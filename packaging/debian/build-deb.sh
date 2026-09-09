@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="${EPG_PACKAGE_VERSION:-1.20.1}"
+VERSION="${EPG_PACKAGE_VERSION:-1.20.2}"
 REVISION="${EPG_PACKAGE_REVISION:-1}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
