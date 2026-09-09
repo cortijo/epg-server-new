@@ -714,6 +714,8 @@ class EpgProductTests(unittest.TestCase):
     def test_xmltv_sources_has_explicit_close_button(self):
         self.assertIn('<h2>Fontes XMLTV</h2><div class="actions">', INDEX_HTML)
         self.assertIn('<button onclick="closeModal()">Fechar</button>', INDEX_HTML)
+        self.assertIn("Histórico de sincronização", INDEX_HTML)
+        self.assertIn("function openSourceHistory(sourceId='')", INDEX_HTML)
         self.assertIn('<button onclick="editSource()">+ Nova fonte</button>', INDEX_HTML)
 
     def test_timeline_guide_is_consolidated_and_searchable(self):

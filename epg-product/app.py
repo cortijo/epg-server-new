@@ -38,7 +38,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "EPG Stream"
-PRODUCT_VERSION = "1.18.3"
+PRODUCT_VERSION = "1.19.0"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
@@ -807,8 +807,32 @@ class GuideCache:
         self.entries: dict[str, dict[str, Any]] = {}
         self.errors: dict[str, dict[str, Any]] = {}
         self.cache_dir = cache_dir
+        self.history_path = cache_dir / "source-sync-history.json" if cache_dir else None
+        self.history: list[dict[str, Any]] = []
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
+        if self.history_path and self.history_path.is_file():
+            try:
+                loaded = json.loads(self.history_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    self.history = loaded[-500:]
+            except (OSError, ValueError):
+                self.history = []
+
+    def _record_sync(self, event: dict[str, Any]) -> None:
+        event = {"id": uuid.uuid4().hex, **event}
+        with self.lock:
+            self.history = ([event] + self.history)[:500]
+            if self.history_path:
+                temporary = self.history_path.with_name(f".{self.history_path.name}.{uuid.uuid4().hex}.tmp")
+                temporary.write_text(json.dumps(self.history, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, self.history_path)
+
+    def sync_history(self, source_id: str = "") -> list[dict[str, Any]]:
+        with self.lock:
+            events = copy.deepcopy(self.history)
+        return [event for event in events if not source_id or event.get("source_id") == source_id]
 
     def _parse_cache_path(self, source: dict[str, Any]) -> Path | None:
         token = str(source.get("parse_token") or "")
@@ -924,6 +948,7 @@ class GuideCache:
 
     def get(self, source: dict[str, Any], force: bool = False) -> dict[str, Any]:
         source_id = source["id"]
+        started_at = now_epoch()
         with self.lock:
             cached = self.entries.get(source_id)
             if cached and not force and time.time() - cached["fetched_at"] < GUIDE_CACHE_SECONDS:
@@ -945,6 +970,10 @@ class GuideCache:
                 parsed.update({"normalized_payload": payload, "normalization": stats})
                 self._persist_normalized(source, payload, stats)
         except Exception as error:
+            self._record_sync({"source_id": source_id, "source_name": source.get("name", source_id),
+                               "status": "error", "started_at": started_at, "finished_at": now_epoch(),
+                               "duration_ms": max(0, int((time.time() - started_at) * 1000)),
+                               "error": str(error)})
             with self.lock:
                 failed_at = now_epoch()
                 self.errors[source_id] = {"message": str(error), "at": failed_at,
@@ -959,10 +988,21 @@ class GuideCache:
                 return persisted
             raise
         with self.lock:
+            previous = self.entries.get(source_id)
             self.entries[source_id] = parsed
             self.errors.pop(source_id, None)
+        digest = hashlib.sha256(payload).hexdigest()
+        previous_digest = str(previous.get("content_sha256") or "") if previous else ""
+        parsed["content_sha256"] = digest
         self._persist_guide(source_id, payload)
         self._persist_status(source_id, parsed)
+        self._record_sync({"source_id": source_id, "source_name": source.get("name", source_id),
+                           "status": "success", "started_at": started_at, "finished_at": now_epoch(),
+                           "duration_ms": max(0, int((time.time() - started_at) * 1000)),
+                           "changed": not previous_digest or previous_digest != digest,
+                           "sha256": digest, "bytes": len(payload),
+                           "channels": len(parsed["channels"]),
+                           "programmes": sum(map(len, parsed["programmes"].values()))})
         return parsed
 
     def invalidate(self, source_id: str) -> None:
@@ -2386,6 +2426,10 @@ class Handler(BaseHTTPRequestHandler):
                      "sync_status": APP.guides.status(source)}
                     for source in APP.store.snapshot()["sources"]
                 ]})
+            elif path == "/api/sources/history":
+                self._require_license()
+                source_id = self._query().get("source_id", [""])[0]
+                self._json({"events": APP.guides.sync_history(source_id)})
             elif path == "/api/publications":
                 self._require_license()
                 self._json({"publications": APP.publications()})
@@ -2597,7 +2641,7 @@ async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encode
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
 async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
 function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
-function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.18.3</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
+function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px"><h2 style="margin-bottom:8px">EPG Stream</h2><p><b>Versão:</b> 1.19.0</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
 async function checkUpdate(){const info=el('updateInfo');if(info)info.textContent='Consultando a release oficial…';try{const u=await api('/api/update');const mode=u.install_mode==='native'?'Pacote nativo':'Docker';const last=u.last_update?.message?`<p class="muted">Última tentativa: ${esc(u.last_update.message)}</p>`:'';const action=u.update_available&&u.asset_available&&u.install_mode==='native'?`<button class="primary" onclick="applyUpdate('${esc(u.tag)}')">Atualizar agora para ${esc(u.latest_version)}</button>`:'';const docker=u.install_mode!=='native'&&u.update_available?'<p class="muted">Esta instalação usa Docker. Atualize a imagem pelo host para preservar volumes e rollback.</p>':'';info.innerHTML=`<p><b>Instalação:</b> ${mode}</p><p><b>Versão instalada:</b> ${esc(u.current_version)}</p><p><b>Última release:</b> ${esc(u.latest_version)}</p><p>${u.update_available?'Existe uma atualização disponível.':'O sistema está atualizado.'}</p>${docker}${last}${action}`}catch(e){if(info)info.innerHTML=`<span class="error-text">${esc(e.message)}</span>`}}
 async function applyUpdate(tag){if(!confirm(`Atualizar o EPG Stream para ${tag}? Os serviços serão reiniciados durante a instalação.`))return;try{const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({tag})});toast(r.message||'Atualização solicitada');const info=el('updateInfo');if(info)info.innerHTML='<b>Atualização agendada.</b><p class="muted">O serviço será reiniciado após validar e instalar o pacote. Reabra o painel em alguns instantes.</p>'}catch(e){toast(e.message,true)}}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do EPG Stream</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}
@@ -2618,7 +2662,8 @@ async function copyPublicationUrl(id){const input=el(`publicationUrl-${id}`);try
 async function deletePublicationVersion(publicationId,versionId){if(!confirm('Excluir esta versão do XMLTV? A URL poderá selecionar outro arquivo.'))return;try{await api('/api/publications/version/delete',{method:'POST',body:JSON.stringify({publication_id:publicationId,version_id:versionId})});toast('Versão excluída');openPublications()}catch(e){toast(e.message,true)}}
 async function deletePublication(id){if(!confirm('Excluir a publicação, todos os arquivos e sua URL permanente?'))return;try{await api('/api/publications/delete',{method:'POST',body:JSON.stringify({id})});toast('Publicação excluída');openPublications()}catch(e){toast(e.message,true)}}
 function sourceSyncSummary(s){const x=s.sync_status;if(!x)return '<div class="muted" style="margin-top:7px">Ainda não sincronizada nesta instalação.</div>';const last=new Date(x.fetched_at*1000).toLocaleString('pt-BR'),next=new Date(x.next_refresh_at*1000).toLocaleString('pt-BR');return `<div class="muted" style="margin-top:7px"><b>${x.channel_count.toLocaleString('pt-BR')}</b> canais · <b>${x.programme_count.toLocaleString('pt-BR')}</b> programas · Atualizada: <b>${last}</b> · Próxima: <b>${next}</b></div>`}
-function openSources(){modal(`<div class="guide-head"><h2>Fontes XMLTV</h2><div class="actions"><button onclick="editSource()">+ Nova fonte</button><button onclick="closeModal()">Fechar</button></div></div><div class="guide-list">${sources.map(s=>`<div class="guide-item"><div><b>${s.source_type==='parse_xml'?'PARSE-XML':s.is_default?'PADRÃO':'XMLTV'}</b></div><div><strong>${esc(s.name)}</strong><div class="muted">${esc(s.url)}</div>${sourceSyncSummary(s)}<div class="actions" style="margin-top:8px"><button class="primary" onclick="openSourceCatalog('${esc(s.id)}')">Ver canais e programação</button><button onclick="editSource('${esc(s.id)}')">Editar</button><button onclick="testSource('${esc(s.id)}')">Sincronizar</button>${sources.length>1?`<button class="danger" onclick="deleteSource('${esc(s.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div>`)}
+function openSources(){modal(`<div class="guide-head"><h2>Fontes XMLTV</h2><div class="actions"><button onclick="openSourceHistory()">Histórico de sincronização</button><button onclick="editSource()">+ Nova fonte</button><button onclick="closeModal()">Fechar</button></div></div><div class="guide-list">${sources.map(s=>`<div class="guide-item"><div><b>${s.source_type==='parse_xml'?'PARSE-XML':s.is_default?'PADRÃO':'XMLTV'}</b></div><div><strong>${esc(s.name)}</strong><div class="muted">${esc(s.url)}</div>${sourceSyncSummary(s)}<div class="actions" style="margin-top:8px"><button class="primary" onclick="openSourceCatalog('${esc(s.id)}')">Ver canais e programação</button><button onclick="openSourceHistory('${esc(s.id)}')">Histórico</button><button onclick="editSource('${esc(s.id)}')">Editar</button><button onclick="testSource('${esc(s.id)}')">Sincronizar</button>${sources.length>1?`<button class="danger" onclick="deleteSource('${esc(s.id)}')">Excluir</button>`:''}</div></div></div>`).join('')}</div>`)}
+async function openSourceHistory(sourceId=''){try{const events=(await api(`/api/sources/history${sourceId?`?source_id=${encodeURIComponent(sourceId)}`:''}`)).events;modal(`<div class="guide-head"><div><h2>Histórico de sincronização XMLTV</h2><div class="muted">Cada download, validação e mudança detectada nas fontes.</div></div><div class="actions"><button onclick="openSources()">Voltar</button><button onclick="closeModal()">Fechar</button></div></div><div class="table-wrap" style="margin-top:15px"><table class="version-table"><thead><tr><th>Resultado</th><th>Fonte</th><th>Atualização</th><th>Conteúdo</th><th>Versão XMLTV</th><th>Detalhes</th></tr></thead><tbody>${events.length?events.map(e=>`<tr><td><span class="badge ${e.status==='success'?'running':'error'}">${e.status==='success'?'Sucesso':'Erro'}</span></td><td><b>${esc(e.source_name||e.source_id)}</b><div class="muted"><code>${esc(e.source_id)}</code></div></td><td>${publicationDate(e.finished_at)}<div class="muted">${(e.duration_ms||0).toLocaleString('pt-BR')} ms</div></td><td>${e.status==='success'?`${(e.channels||0).toLocaleString('pt-BR')} canais<br>${(e.programmes||0).toLocaleString('pt-BR')} programas<br>${((e.bytes||0)/1024/1024).toFixed(1)} MiB`:'—'}</td><td>${e.status==='success'?`<b>${e.changed?'Nova versão':'Sem alteração'}</b><div class="muted"><code>${esc((e.sha256||'').slice(0,16))}…</code></div>`:'—'}</td><td class="${e.status==='error'?'error-text':''}">${esc(e.error||'XMLTV baixado e validado corretamente')}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">Nenhuma sincronização registrada desde esta atualização.</td></tr>'}</tbody></table></div>`,'publication-modal')}catch(e){toast(e.message,true)}}
 function editSource(id=''){const s=sources.find(x=>x.id===id)||{};modal(`<h2>${id?'Editar':'Nova'} fonte XMLTV</h2><div class="form-grid"><input id="srcId" type="hidden" value="${esc(s.id||'')}"><label class="wide">Nome<input id="srcName" value="${esc(s.name||'')}"></label><label>Tipo de entrada<select id="srcType" onchange="sourceTypeChanged()"><option value="xmltv" ${(s.source_type||'xmltv')==='xmltv'?'selected':''}>XMLTV padrão</option><option value="parse_xml" ${s.source_type==='parse_xml'?'selected':''}>Parse-XML (normalizar provedor)</option></select></label><label><span>Fonte padrão</span><select id="srcDefault"><option value="0">Não</option><option value="1" ${s.is_default?'selected':''}>Sim</option></select></label><label class="wide">URL HTTP/HTTPS<input id="srcUrl" value="${esc(s.url||'')}"></label><div id="srcTypeHelp" class="muted wide"></div></div><div class="modal-actions"><button onclick="openSources()">Voltar</button><button onclick="testSourceForm()">Testar</button><button class="primary" onclick="saveSource()">Salvar</button></div>`);sourceTypeChanged()}
 function sourceTypeChanged(){const help=el('srcTypeHelp');if(help)help.textContent=el('srcType').value==='parse_xml'?'Cria canais ausentes, aplica UTC-03:00, remove eventos inválidos e entrega uma URL interna estável ao emissor.':'Usa o XMLTV original sem transformação estrutural.'}
 async function saveSource(){try{await api('/api/sources',{method:'POST',body:JSON.stringify({id:el('srcId').value,name:el('srcName').value,url:el('srcUrl').value,source_type:el('srcType').value,is_default:el('srcDefault').value==='1'})});await refresh();openSources();toast('Fonte salva')}catch(e){toast(e.message,true)}}
