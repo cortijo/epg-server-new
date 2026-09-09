@@ -49,7 +49,7 @@ o candidato e a produção estejam na mesma versão.
 
 - implementação Parse-XML: `b4001f5`;
 - tag prevista para o estado final documentado: `epg-v1.17.2`;
-- `PRODUCT_VERSION`: `1.17.3`;
+- `PRODUCT_VERSION`: `1.18.0`;
 - servidor de licenças e produção: `1.1.0`;
 - o bloqueio integral sem licença e o reinício global foram validados e
   promovidos em 27/08/2026 às 08:16;

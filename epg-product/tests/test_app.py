@@ -715,16 +715,21 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('<button onclick="closeModal()">Fechar</button>', INDEX_HTML)
         self.assertIn('<button onclick="editSource()">+ Nova fonte</button>', INDEX_HTML)
 
-    def test_timeline_guide_has_carrier_filter_and_navigation(self):
+    def test_timeline_guide_is_consolidated_and_searchable(self):
         self.assertIn('id="timelineButton" disabled onclick="openTimeline()"', INDEX_HTML)
         self.assertIn("el('timelineButton').disabled=!valid||!(state.carriers||[]).length", INDEX_HTML)
         self.assertIn("function renderTimeline(g)", INDEX_HTML)
-        self.assertIn("const TIMELINE_WINDOW=3*60*60,TIMELINE_STEP=90*60", INDEX_HTML)
-        self.assertIn('id="timelineCarrier"', INDEX_HTML)
+        self.assertIn("const TIMELINE_STEP=2*3600", INDEX_HTML)
+        self.assertIn('/api/guides?start=', INDEX_HTML)
+        self.assertIn('id="timelineCategory"', INDEX_HTML)
+        self.assertIn('id="timelineChannelSearch"', INDEX_HTML)
+        self.assertIn('id="timelineProgramSearch"', INDEX_HTML)
+        self.assertIn("function timelineDayButtons()", INDEX_HTML)
+        self.assertIn("function zoomTimeline(direction)", INDEX_HTML)
         self.assertIn('onclick="resetTimeline()">Agora</button>', INDEX_HTML)
         self.assertIn('class="timeline-program', INDEX_HTML)
         self.assertIn('class="timeline-now"', INDEX_HTML)
-        self.assertIn("function openTimelineProgram(serviceId,start)", INDEX_HTML)
+        self.assertIn("function openTimelineProgram(rowId,start)", INDEX_HTML)
 
     def test_logo_controls_and_previews_are_hidden_but_backend_is_preserved(self):
         self.assertNotIn("Logo ISDB-TB<div", INDEX_HTML)
