@@ -338,6 +338,10 @@ class EpgProductTests(unittest.TestCase):
     def test_about_and_update_ui_are_available(self):
         self.assertIn('onclick="openAbout()">Sobre</button>', INDEX_HTML)
         self.assertIn("Developed by Julio Cortijo", INDEX_HTML)
+        self.assertIn("<title>OMNIEPG</title>", INDEX_HTML)
+        self.assertIn("/assets/omniepg_icone.svg", INDEX_HTML)
+        self.assertIn("/assets/omniepg_logotipo_escuro.svg", INDEX_HTML)
+        self.assertIn("/assets/omniepg_logotipo_transparente.svg", INDEX_HTML)
         self.assertIn("async function checkUpdate()", INDEX_HTML)
         self.assertIn("async function applyUpdate(tag)", INDEX_HTML)
 

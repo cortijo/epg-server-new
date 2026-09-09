@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /out/TVStreamEpgOnly /app/TVStreamEpgOnly
 COPY epg-product/app.py /app/app.py
 COPY epg-product/license_client.py /app/license_client.py
+COPY epg-product/assets /app/assets
 COPY scripts/verify_isdbtb_ts.py /app/verify_isdbtb_ts.py
 RUN chmod 0755 /app/TVStreamEpgOnly /app/app.py /app/license_client.py /app/verify_isdbtb_ts.py
 WORKDIR /data
