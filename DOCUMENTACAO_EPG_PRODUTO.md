@@ -1,6 +1,6 @@
 # EPG Stream — documentação autoritativa do produto independente
 
-> Versão documentada para a entrega: **1.20.0**. Este documento é o ponto inicial obrigatório para manutenção do
+> Versão documentada para a entrega: **1.20.1**. Este documento é o ponto inicial obrigatório para manutenção do
 > EPG Stream. As regras gerais do repositório continuam em `AGENTS.md` e o
 > procedimento operacional compartilhado em `GUIA_OPERACIONAL_AGENTES.md`.
 
@@ -47,6 +47,7 @@ porta HTTP 9100 e volume `/srv/epg-stream`.
 | 1.12.x | bloqueio integral sem licença, reinício global e correção da sinopse EIT |
 | 1.13.0 | simulador de receptor ISDB-TB com captura não intrusiva do TS gerado |
 | 1.13.1 | `0x4D` leva somente o título e `0x4E` leva toda a sinopse no perfil ISDB-TB |
+| 1.20.1 | Menu lateral completo com ícones/rótulos e busca incluindo nomes e IDs dos canais |
 | 1.20.0 | Interface operacional compacta com navegação lateral, métricas, filtros e tabela densa |
 | 1.19.0 | Histórico persistente audita versão, mudanças, métricas e erros das fontes XMLTV |
 | 1.18.2 | Cache XMLTV persistente impede bloqueio da grade após reinício |
