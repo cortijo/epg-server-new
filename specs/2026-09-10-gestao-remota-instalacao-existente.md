@@ -113,12 +113,13 @@ substituí-lo apenas após smoke test. Rollback: parar o novo e iniciar o anteri
 | 2026-09-10 | inventário real | Ubuntu 22.04, imagem 1.22.0, licença válida, 27/51, quatro fontes e cinco erros |
 | 2026-09-10 | backup real | arquivo íntegro de 84 MB; OMNIEPG permaneceu saudável |
 | 2026-09-10 | promoção | instalador 1.1.2 saudável, auth 401/200 e 27 emissores preservados |
+| 2026-09-10 | hotfix de resposta SSH | 1.1.3 validada contra 187.19.16.59; ruído externo ignorado e inventário retornado |
 
 ## 15. Resultado final
 
 - Estado: concluída
-- Imagem: `omniepg-installer:v1.1.2`
-- Image ID: `sha256:c3d61f3e7c0c9066ca0c7ca604c98a43f484a7c9b30f68b462fdd973771956cb`
+- Imagem: `omniepg-installer:v1.1.3`
+- Image ID: `sha256:0e6785fc4ab49d959c6a7e91fb7af630676db74a93724091c04907a76e78e794`
 - Produção: `181.233.106.46`, loopback `127.0.0.1:9300`
 - Rollback: `omniepg-installer-pre-v1.1.2-20260910`, imagem 1.0.1
 - Commit: a preencher

@@ -104,6 +104,12 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("Atualizar / downgrade", app.INDEX)
         self.assertIn("Erros nos canais", app.INDEX)
 
+    def test_structured_response_ignores_shell_noise(self):
+        parsed = app.parse_marked_json("sudo notice\n42\n__OMNIEPG_JSON__{\"ok\":true}\n", "missing")
+        self.assertTrue(parsed["ok"])
+        with self.assertRaises(app.InstallError):
+            app.parse_marked_json("only shell noise", "missing")
+
 
 if __name__ == "__main__":
     unittest.main()

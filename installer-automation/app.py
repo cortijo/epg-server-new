@@ -20,7 +20,7 @@ from typing import Any
 
 import paramiko
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.RLock()
 HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)$")
@@ -256,6 +256,13 @@ def redact(text: str, secrets: list[str]) -> str:
     return text
 
 
+def parse_marked_json(output: str, missing_message: str) -> dict[str, Any]:
+    marker = "__OMNIEPG_JSON__"
+    if marker not in output:
+        raise InstallError(f"{missing_message}: {output[-1000:]}")
+    return json.loads(output.rsplit(marker, 1)[1].splitlines()[0])
+
+
 def job_log(job_id: str, message: str) -> None:
     with JOBS_LOCK:
         job = JOBS[job_id]
@@ -353,7 +360,7 @@ backups=[]
 try:
     backups=sorted([x for x in os.listdir("/srv/omniepg-backups") if x.endswith(".tar.gz")],reverse=True)[:30]
 except Exception: pass
-print(json.dumps({"container":{"name":name,"image":obj["Config"]["Image"],"status":obj["State"]["Status"],"running":obj["State"]["Running"],"started_at":obj["State"].get("StartedAt"),"restart_count":obj.get("RestartCount",0),"network":obj["HostConfig"].get("NetworkMode"),"mounts":mounts},"health":health,"latency_ms":latency,"port":port,"license_server":env.get("EPG_LICENSE_SERVER_URL",""),"license_interval":env.get("EPG_LICENSE_CHECK_SECONDS",""),"installation_id":env.get("EPG_LICENSE_INSTALLATION_ID",""),"carriers":len(carriers),"channels":sum(len(c.get("services",[])) for c in carriers),"active_emitters":sum(1 for c in carriers if c.get("active")),"sources":safe_sources,"errors":errors,"management_error":state.get("management_error",""),"backups":backups}))
+print("__OMNIEPG_JSON__"+json.dumps({"container":{"name":name,"image":obj["Config"]["Image"],"status":obj["State"]["Status"],"running":obj["State"]["Running"],"started_at":obj["State"].get("StartedAt"),"restart_count":obj.get("RestartCount",0),"network":obj["HostConfig"].get("NetworkMode"),"mounts":mounts},"health":health,"latency_ms":latency,"port":port,"license_server":env.get("EPG_LICENSE_SERVER_URL",""),"license_interval":env.get("EPG_LICENSE_CHECK_SECONDS",""),"installation_id":env.get("EPG_LICENSE_INSTALLATION_ID",""),"carriers":len(carriers),"channels":sum(len(c.get("services",[])) for c in carriers),"active_emitters":sum(1 for c in carriers if c.get("active")),"sources":safe_sources,"errors":errors,"management_error":state.get("management_error",""),"backups":backups}))
 '''.replace("import base64,json,subprocess,sys,time,urllib.request", "import base64,json,os,subprocess,sys,time,urllib.request")
 
 
@@ -369,7 +376,7 @@ def inspect_existing(config: dict[str, Any]) -> dict[str, Any]:
         code, output = run(client, "sudo -S -p '' python3 -", 30, config["sudo_password"] + "\n" + script)
         if code:
             raise InstallError(f"Falha ao inspecionar a instalação: {output[-1000:]}")
-        result = json.loads(output.strip().splitlines()[-1])
+        result = parse_marked_json(output, "O servidor não devolveu um inventário válido")
         result["ssh_latency_ms"] = round((time.monotonic() - started) * 1000, 1)
         result["fingerprint"] = observed
         return result
@@ -478,7 +485,7 @@ elif action=="deploy":
     work="/opt/omniepg-installer/manage-build-"+str(os.getpid()); shutil.rmtree(work,ignore_errors=True)
     call(["git","clone","--depth","1","--branch",cfg["ref"],cfg["repository"],work]); call(["docker","build","-t",cfg["image"],"-f",work+"/epg-product/Dockerfile",work]); shutil.rmtree(work,ignore_errors=True)
     result=recreate(image=cfg["image"]); result["message"]="Versão aplicada e validada"
-print(json.dumps(result))
+print("__OMNIEPG_JSON__"+json.dumps(result))
 '''
 
 
@@ -497,7 +504,7 @@ def manage_worker(job_id: str, config: dict[str, Any]) -> None:
         clean = redact(output, secrets)
         if code:
             raise InstallError(f"Ação falhou (código {code}): {clean[-3000:]}")
-        result = json.loads(output.strip().splitlines()[-1])
+        result = parse_marked_json(output, "A ação não devolveu resultado estruturado")
         job_log(job_id, result.get("message", "Ação concluída"))
         with JOBS_LOCK:
             JOBS[job_id]["status"] = "completed"; JOBS[job_id]["result"] = result
@@ -514,7 +521,7 @@ INDEX = r'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta 
 const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));let jobId='',timer=0;
 document.querySelector('header>div').textContent='Provisionamento remoto seguro por SSH · v1.0.1';
 el('ref').value='';el('ref').placeholder='Tag ou commit imutável, por exemplo epg-v1.22.0';
-document.querySelector('header>div').textContent='Instalação e gestão remota segura · v1.1.2';
+document.querySelector('header>div').textContent='Instalação e gestão remota segura · v1.1.3';
 document.head.insertAdjacentHTML('beforeend','<style>.mode-switch{display:flex;gap:8px;margin:18px 0}.mode-switch button{flex:1;border:1px solid var(--line)}.mode-switch button.active{background:var(--blue);color:#fff}.manage{display:none}.manage.show{display:block}.install-hidden{display:none!important}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{padding:14px;border:1px solid var(--line);border-radius:10px}.metric small{display:block;color:#657789}.metric b{display:block;font-size:19px;margin-top:5px}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px;border-top:1px solid var(--line);text-align:left}.management-actions{display:flex;gap:8px;flex-wrap:wrap}.management-actions button{background:#e8eef5}.danger{color:var(--red)}@media(max-width:720px){.metrics{grid-template-columns:1fr 1fr}}</style>');
 const main=document.querySelector('main.wrap'),notice=main.querySelector('.notice'),installCards=[...main.querySelectorAll(':scope>.card')];notice.insertAdjacentHTML('afterend','<div class="mode-switch"><button id="modeNew" class="active" onclick="setMode(\'new\')">Nova instalação</button><button id="modeManage" onclick="setMode(\'manage\')">Instalação existente</button></div><section id="manageView" class="manage"><div class="card"><h2>Servidor OMNIEPG existente</h2><div class="grid"><label>Host ou IP<input id="mHost"></label><label>Porta SSH<input id="mPort" type="number" value="22"></label><label>Usuário SSH<input id="mUsername"></label><label>Senha SSH<input id="mPassword" type="password"></label><label>Senha sudo<input id="mSudo" type="password"></label><label>Container<input id="mContainer" value="epg-stream"></label><label>Usuário do painel<input id="mPanelUser" value="epgadmin"></label><label>Senha do painel<input id="mPanelPassword" type="password"></label><label>Fingerprint<input id="mFingerprint" readonly></label></div><div class="actions"><button onclick="manageProbe()">Identificar</button><button class="primary" id="manageConnect" disabled onclick="inspectManage()">Conectar e analisar</button></div></div><div id="manageDashboard"></div></section>');
 function setMode(mode){const manage=mode==='manage';el('modeNew').classList.toggle('active',!manage);el('modeManage').classList.toggle('active',manage);el('manageView').classList.toggle('show',manage);installCards.slice(0,2).forEach(card=>card.classList.toggle('install-hidden',manage))}
