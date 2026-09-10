@@ -739,6 +739,47 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("Herdada da portadora", INDEX_HTML)
         self.assertIn("TSID ${carrier.transport_stream_id}", INDEX_HTML)
         self.assertIn("ONID ${carrier.original_network_id}", INDEX_HTML)
+
+    def test_delete_source_migrates_references_to_selected_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            application = object.__new__(Application)
+            application.store = Store(Path(directory) / "config.json")
+            application.store.data["sources"] = [
+                {"id": "old", "name": "BrazilTVEPG", "url": "https://old.test/guide.xml",
+                 "source_type": "xmltv", "is_default": True},
+                {"id": "new", "name": "Nova fonte", "url": "https://new.test/guide.xml",
+                 "source_type": "xmltv", "is_default": False},
+            ]
+            application.store.data["carriers"] = [{
+                "id": "carrier", "name": "Portadora", "source_id": "old",
+                "services": [
+                    {"id": "inherited", "source_id": ""},
+                    {"id": "direct", "source_id": "old"},
+                ],
+            }]
+            application.store.save()
+            application.guides = mock.Mock()
+            application.supervisor = mock.Mock()
+            application.supervisor.state.return_value = {
+                "carriers": [{"id": "carrier", "active": True}]}
+
+            with self.assertRaises(ApiError):
+                application.delete_source("old")
+            result = application.delete_source("old", "new")
+
+            snapshot = application.store.snapshot()
+            self.assertEqual([source["id"] for source in snapshot["sources"]], ["new"])
+            self.assertTrue(snapshot["sources"][0]["is_default"])
+            self.assertEqual(snapshot["carriers"][0]["source_id"], "new")
+            self.assertEqual(snapshot["carriers"][0]["services"][0]["source_id"], "")
+            self.assertEqual(snapshot["carriers"][0]["services"][1]["source_id"], "new")
+            self.assertEqual(result["restarted"], ["carrier"])
+            application.supervisor.action.assert_called_once_with("carrier", "restart")
+
+    def test_delete_source_ui_requires_replacement(self):
+        self.assertIn("Fonte substituta", INDEX_HTML)
+        self.assertIn("Migrar e excluir", INDEX_HTML)
+        self.assertIn("replacement_id:el('sourceReplacement').value", INDEX_HTML)
         self.assertIn("function openSourceHistory(sourceId='')", INDEX_HTML)
         self.assertIn('<button onclick="editSource()">+ Nova fonte</button>', INDEX_HTML)
 
