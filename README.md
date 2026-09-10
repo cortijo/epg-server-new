@@ -14,6 +14,8 @@ por outro agente ou LLM.
 - `epg-product/app.py`: painel web, autenticação, usuários, fontes e portadoras;
 - `epg-product/license_client.py`: validação online e limite de canais;
 - `license-server/`: autoridade de licenças em imagem Docker independente;
+- `installer-automation/`: painel Docker autenticado para provisionar máquinas
+  Linux remotas via SSH, instalar Docker e implantar o OMNIEPG com rollback;
 - `epg-product/app.py`: publicações XMLTV versionadas com URL permanente;
 - `src/EpgOnlyMain.cpp`: emissor MPEG-TS EPG-only;
 - `src/EpgInjector.cpp`: XMLTV, EIT, TDT e TOT;

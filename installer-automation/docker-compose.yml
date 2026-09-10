@@ -1,0 +1,22 @@
+services:
+  omniepg-installer:
+    build:
+      context: ..
+      dockerfile: installer-automation/Dockerfile
+    image: omniepg-installer:v1.0.1
+    container_name: omniepg-installer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9300:9300"
+    environment:
+      INSTALLER_HTTP_HOST: 0.0.0.0
+      INSTALLER_HTTP_PORT: 9300
+      INSTALLER_ADMIN_USER: ${INSTALLER_ADMIN_USER:?defina INSTALLER_ADMIN_USER}
+      INSTALLER_ADMIN_PASSWORD: ${INSTALLER_ADMIN_PASSWORD:?defina INSTALLER_ADMIN_PASSWORD}
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
