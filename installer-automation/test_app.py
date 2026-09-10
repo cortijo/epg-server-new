@@ -67,6 +67,43 @@ class InstallerTests(unittest.TestCase):
         public = {"id": "1", "status": "running", "log": [], "result": None}
         self.assertFalse(set(public) & {"password", "sudo_password", "license_key", "admin_password"})
 
+    def manage(self, action="restart"):
+        return {
+            "host": "192.0.2.10", "port": 22, "username": "operator",
+            "password": "ssh-secret", "sudo_password": "sudo-secret",
+            "fingerprint": "SHA256:expected", "container": "epg-stream",
+            "panel_user": "epgadmin", "panel_password": "panel-secret-long",
+            "action": action,
+        }
+
+    def test_management_actions_validate_destructive_inputs(self):
+        self.assertEqual(app.validate_action(self.manage())["action"], "restart")
+        restore = self.manage("restore")
+        restore["backup"] = "../../etc/shadow"
+        with self.assertRaises(app.InstallError):
+            app.validate_action(restore)
+        deploy = self.manage("deploy")
+        deploy.update({"repository": "https://github.com/cortijo/epgserver2.git", "ref": "main", "image": "epgserver:latest"})
+        with self.assertRaises(app.InstallError):
+            app.validate_action(deploy)
+
+    def test_management_script_preserves_backup_and_rollback(self):
+        self.assertIn("safety=", app.REMOTE_ACTION)
+        self.assertIn("rollback=name+", app.REMOTE_ACTION)
+        self.assertIn('call(["docker","update","--restart=no",rollback])', app.REMOTE_ACTION)
+        self.assertIn("shutil.rmtree(data,ignore_errors=True)", app.REMOTE_ACTION)
+        self.assertIn("--warning=no-file-changed", app.REMOTE_ACTION)
+        self.assertIn("os.unlink(target)", app.REMOTE_ACTION)
+        self.assertIn("packed.returncode not in (0,1)", app.REMOTE_ACTION)
+        self.assertIn('["tar","-tzf",target]', app.REMOTE_ACTION)
+
+    def test_management_ui_has_both_modes_and_diagnostics(self):
+        self.assertIn("Nova instalação", app.INDEX)
+        self.assertIn("Instalação existente", app.INDEX)
+        self.assertIn("LATÊNCIA HEALTH", app.INDEX)
+        self.assertIn("Atualizar / downgrade", app.INDEX)
+        self.assertIn("Erros nos canais", app.INDEX)
+
 
 if __name__ == "__main__":
     unittest.main()

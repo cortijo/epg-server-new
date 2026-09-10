@@ -1,9 +1,27 @@
 # OMNIEPG Installer
 
-Imagem independente para instalar ou atualizar o OMNIEPG em máquinas Linux
-remotas via SSH. O painel identifica o host, confirma sua fingerprint, instala
-Docker, compila uma referência Git imutável, preserva a instalação anterior e
-valida o novo container.
+Imagem independente com duas visões: instalar o OMNIEPG em uma máquina Linux
+nova ou administrar uma instalação existente por SSH. O painel confirma a
+fingerprint, não guarda credenciais e preserva rollback nas trocas de versão.
+
+## Instalação existente
+
+Após identificar o host, informe também o usuário e a senha do painel OMNIEPG.
+A visão de gestão apresenta:
+
+- estado online/offline, latência SSH e latência do health;
+- imagem, rede Docker, reinícios, versão e estado da licença;
+- total de portadoras, canais e emissores ativos;
+- fontes XMLTV por nome, tipo e quantidade de canais, sem revelar suas URLs;
+- erros de EPG por portadora, canal e fonte;
+- reinício do container;
+- criação, listagem e restauração de backup com cópia de segurança automática;
+- troca do servidor e da chave de licença;
+- atualização ou downgrade por tag/commit e imagem imutáveis, com rollback.
+
+Backups automáticos exigem que `/data` seja um bind mount. Instalações antigas
+que usam volume nomeado continuam monitoráveis, mas precisam ser migradas para
+bind mount antes de backup/restore pelo painel.
 
 ## Segurança
 
@@ -66,5 +84,5 @@ XMLTV, portadoras, SID, TSID, ONID ou PIDs.
 ```bash
 cd installer-automation
 python3 -m unittest -v test_app.py
-docker build -t omniepg-installer:v1.0.1 -f Dockerfile ..
+docker build -t omniepg-installer:v1.1.2 -f Dockerfile ..
 ```
