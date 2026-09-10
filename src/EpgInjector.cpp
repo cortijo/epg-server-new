@@ -883,6 +883,8 @@ struct EpgInjector::Impl {
           profile(epgProfile(config.epgMode)),
           utcOffsetMinutes(config.epgClockUtcOffsetMinutes),
           correctionSeconds(config.epgClockCorrectionSeconds),
+          guideRefreshSeconds(config.epgGuideRefreshSeconds),
+          guideRetrySeconds(config.epgGuideRetrySeconds),
           civilShiftSeconds(effectiveCivilShiftSeconds(
               profile, utcOffsetMinutes, correctionSeconds)),
           transportStreamId(static_cast<std::uint16_t>(config.epgTransportStreamId)),
@@ -930,9 +932,9 @@ struct EpgInjector::Impl {
                     lastProgrammeFingerprint = fingerprint;
                     fingerprintInitialized = true;
                     cachedProgrammes = std::move(programmes);
-                    nextGuideDownload = steadyNow + std::chrono::hours(3);
+                    nextGuideDownload = steadyNow + std::chrono::seconds(guideRefreshSeconds);
                 } else {
-                    nextGuideDownload = steadyNow + std::chrono::minutes(5);
+                    nextGuideDownload = steadyNow + std::chrono::seconds(guideRetrySeconds);
                 }
             }
 
@@ -1092,6 +1094,8 @@ struct EpgInjector::Impl {
     EpgProfile profile = EpgProfile::Generic;
     std::int32_t utcOffsetMinutes = kBrazilUtcOffsetMinutes;
     std::int32_t correctionSeconds = 0;
+    std::uint32_t guideRefreshSeconds = 10800;
+    std::uint32_t guideRetrySeconds = 300;
     std::int32_t civilShiftSeconds = kBrazilUtcOffsetMinutes * 60;
     std::uint16_t transportStreamId = 1;
     std::uint16_t originalNetworkId = 1;

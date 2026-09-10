@@ -16,12 +16,43 @@ from app import (
     ApiError, Application, GuideCache, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
     parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
-    validate_source, validate_config_backup,
+    validate_source, validate_config_backup, validate_general_settings,
 )
 from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_general_settings_are_validated_persisted_and_visible(self):
+        settings = validate_general_settings({
+            "xmltv_sync_minutes": 30, "emitter_refresh_minutes": 45,
+            "emitter_retry_minutes": 2, "detect_cache_updates": True,
+        })
+        self.assertEqual(settings["xmltv_sync_minutes"], 30)
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "config.json")
+            self.assertEqual(store.snapshot()["general_settings"]["emitter_refresh_minutes"], 180)
+        self.assertIn("Configurações gerais", INDEX_HTML)
+        self.assertIn("detect_cache_updates", INDEX_HTML)
+
+    def test_emitter_environment_receives_configured_refresh_intervals(self):
+        supervisor = object.__new__(Supervisor)
+        supervisor.diagnostic_dir = Path("/tmp/diagnostics")
+        supervisor.store = mock.Mock()
+        supervisor.store.snapshot.return_value = {
+            "sources": [{"id": "source", "url": "http://provider/guide.xml"}],
+            "general_settings": {"xmltv_sync_minutes": 15, "emitter_refresh_minutes": 22,
+                                 "emitter_retry_minutes": 3, "detect_cache_updates": True},
+        }
+        carrier = {"id": "c", "name": "Carrier", "source_id": "source",
+                   "transport_stream_id": 1, "original_network_id": 1,
+                   "destination": "239.1.1.1", "port": 5000, "interface_address": "10.0.0.1",
+                   "pmt_pid": 4096, "bitrate": 1000000, "ttl": 32, "services": [{
+                       "id": "s", "name": "Canal", "epg_channel_id": "canal",
+                       "service_id": 1, "source_id": "source"}]}
+        environment = supervisor._environment(carrier, supervisor.store.snapshot.return_value["sources"][0])
+        self.assertEqual(environment["EPG_GUIDE_REFRESH_SECONDS"], "1320")
+        self.assertEqual(environment["EPG_GUIDE_RETRY_SECONDS"], "180")
+
     def test_parse_xml_normalizes_provider_without_channel_declarations(self):
         now = datetime.now(timezone.utc)
         current_start = now.strftime("%Y%m%d%H%M%S")

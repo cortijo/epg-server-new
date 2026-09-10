@@ -38,7 +38,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.22.0"
+PRODUCT_VERSION = "1.23.0"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
@@ -56,6 +56,12 @@ MAX_BACKUP_CONTENT = 2 * 1024 * 1024 * 1024
 MAX_BACKUP_FILES = 20_000
 GUIDE_CACHE_SECONDS = 300
 SOURCE_SYNC_SECONDS = 3600
+DEFAULT_GENERAL_SETTINGS = {
+    "xmltv_sync_minutes": 60,
+    "emitter_refresh_minutes": 180,
+    "emitter_retry_minutes": 5,
+    "detect_cache_updates": True,
+}
 BRAZIL_TZ = timezone(timedelta(hours=-3))
 PASSWORD_ITERATIONS = 310_000
 PASSWORD_MINIMUM = 10
@@ -468,6 +474,28 @@ def validate_source(source: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def validate_general_settings(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ApiError("Configurações gerais inválidas")
+    result: dict[str, Any] = {}
+    limits = {
+        "xmltv_sync_minutes": (5, 10080),
+        "emitter_refresh_minutes": (1, 10080),
+        "emitter_retry_minutes": (1, 1440),
+    }
+    for key, (minimum, maximum) in limits.items():
+        try:
+            number = int(value.get(key, DEFAULT_GENERAL_SETTINGS[key]))
+        except (TypeError, ValueError) as error:
+            raise ApiError("Os intervalos devem ser informados em minutos") from error
+        if number < minimum or number > maximum:
+            raise ApiError(f"{key} deve ficar entre {minimum} e {maximum} minutos")
+        result[key] = number
+    result["detect_cache_updates"] = bool(
+        value.get("detect_cache_updates", DEFAULT_GENERAL_SETTINGS["detect_cache_updates"]))
+    return result
+
+
 def validate_config_backup(payload: bytes) -> dict[str, Any]:
     try:
         envelope = json.loads(payload)
@@ -777,6 +805,8 @@ class Store:
                 "users": loaded.get("users") if isinstance(loaded.get("users"), list) else [],
                 "xmltv_publications": loaded.get("xmltv_publications")
                 if isinstance(loaded.get("xmltv_publications"), list) else [],
+                "general_settings": validate_general_settings(
+                    loaded.get("general_settings") or DEFAULT_GENERAL_SETTINGS),
             }
             for source in self.data["sources"]:
                 source.setdefault("source_type", "xmltv")
@@ -802,11 +832,12 @@ class Store:
 
 
 class GuideCache:
-    def __init__(self, cache_dir: Path | None = None):
+    def __init__(self, cache_dir: Path | None = None, sync_seconds: int = SOURCE_SYNC_SECONDS):
         self.lock = threading.RLock()
         self.entries: dict[str, dict[str, Any]] = {}
         self.errors: dict[str, dict[str, Any]] = {}
         self.cache_dir = cache_dir
+        self.sync_seconds = int(sync_seconds)
         self.history_path = cache_dir / "source-sync-history.json" if cache_dir else None
         self.history: list[dict[str, Any]] = []
         if cache_dir:
@@ -871,7 +902,7 @@ class GuideCache:
             "channel_count": len(parsed["channels"]),
             "programme_count": sum(map(len, parsed["programmes"].values())),
             "fetched_at": fetched_at,
-            "next_refresh_at": fetched_at + SOURCE_SYNC_SECONDS,
+            "next_refresh_at": fetched_at + self.sync_seconds,
         }
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         temporary.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
@@ -977,7 +1008,7 @@ class GuideCache:
             with self.lock:
                 failed_at = now_epoch()
                 self.errors[source_id] = {"message": str(error), "at": failed_at,
-                                          "next_retry_at": failed_at + SOURCE_SYNC_SECONDS}
+                                          "next_retry_at": failed_at + self.sync_seconds}
             # Never replace a previously validated guide with a broken refresh.
             if cached:
                 return cached
@@ -1018,7 +1049,7 @@ class GuideCache:
                     "channel_count": len(cached["channels"]),
                     "programme_count": sum(map(len, cached["programmes"].values())),
                     "fetched_at": fetched_at,
-                    "next_refresh_at": fetched_at + SOURCE_SYNC_SECONDS,
+                    "next_refresh_at": fetched_at + self.sync_seconds,
                 }
         status_path = self._status_path(source["id"])
         if status_path and status_path.is_file() and status_path.stat().st_size <= 4096:
@@ -1028,7 +1059,7 @@ class GuideCache:
                     "channel_count": int(status["channel_count"]),
                     "programme_count": int(status["programme_count"]),
                     "fetched_at": int(status["fetched_at"]),
-                    "next_refresh_at": int(status["next_refresh_at"]),
+                    "next_refresh_at": int(status["fetched_at"]) + self.sync_seconds,
                 }
             except (OSError, ValueError, KeyError, TypeError):
                 pass
@@ -1043,7 +1074,7 @@ class GuideCache:
                 "channel_count": int(diagnostics.get("channels", 0)),
                 "programme_count": int(diagnostics.get("programmes", 0)),
                 "fetched_at": fetched_at,
-                "next_refresh_at": fetched_at + SOURCE_SYNC_SECONDS,
+                "next_refresh_at": fetched_at + self.sync_seconds,
             }
         except (OSError, ValueError, TypeError):
             return None
@@ -1095,6 +1126,7 @@ class Supervisor:
 
     def _environment(self, carrier: dict[str, Any], source: dict[str, Any]) -> dict[str, str]:
         snapshot = self.store.snapshot()
+        settings = snapshot.get("general_settings", DEFAULT_GENERAL_SETTINGS)
         source_by_id = {item["id"]: item for item in snapshot["sources"]}
         services = []
         for service in carrier["services"]:
@@ -1124,6 +1156,8 @@ class Supervisor:
             "EPG_CLOCK_CORRECTION_SECONDS": str(
                 int(carrier.get("clock_correction_minutes", 0)) * 60),
             "EPG_DIAGNOSTIC_DIR": str(self.diagnostic_dir),
+            "EPG_GUIDE_REFRESH_SECONDS": str(settings["emitter_refresh_minutes"] * 60),
+            "EPG_GUIDE_RETRY_SECONDS": str(settings["emitter_retry_minutes"] * 60),
         })
         return environment
 
@@ -1276,6 +1310,24 @@ class Supervisor:
         return {"result": "ok" if not errors else "partial",
                 "restarted": len(restarted), "errors": errors}
 
+    def restart_for_sources(self, source_ids: set[str]) -> list[str]:
+        snapshot = self.store.snapshot()
+        affected = [carrier for carrier in snapshot["carriers"] if any(
+            (service.get("source_id") or carrier.get("source_id")) in source_ids
+            for service in carrier.get("services", []))]
+        restarted: list[str] = []
+        with self.lock:
+            for carrier in affected:
+                process = self.processes.get(carrier["id"])
+                if not process or process.poll() is not None:
+                    continue
+                try:
+                    self._start_locked(carrier)
+                    restarted.append(carrier["id"])
+                except Exception as error:
+                    print(f"Falha ao recarregar cache em {carrier['id']}: {error}", flush=True)
+        return restarted
+
     def remove(self, carrier_id: str) -> None:
         with self.lock:
             self._stop_locked(carrier_id)
@@ -1361,7 +1413,9 @@ class Application:
         )
         self._bootstrap_user(bootstrap_user, bootstrap_password)
         self._migrate_logos()
-        self.guides = GuideCache(data_dir / "parsed-xml-cache")
+        settings = self.store.snapshot()["general_settings"]
+        self.guides = GuideCache(
+            data_dir / "parsed-xml-cache", settings["xmltv_sync_minutes"] * 60)
         self.source_sync_stopping = threading.Event()
         self.source_sync_thread = threading.Thread(
             target=self._source_sync_loop, name="xmltv-background-sync", daemon=True)
@@ -1383,6 +1437,7 @@ class Application:
         if not self.license.check(channel_count).get("valid"):
             return {"synchronized": 0, "errors": [], "license_blocked": True}
         synchronized = 0
+        changed_sources: set[str] = set()
         errors = []
         current_time = int(time.time())
         for source in snapshot["sources"]:
@@ -1399,12 +1454,33 @@ class Application:
             if status and loaded_in_memory and current_time < int(status["next_refresh_at"]):
                 continue
             try:
-                self.guides.get(source, force=True)
+                with self.guides.lock:
+                    entries = self.guides.entries if isinstance(self.guides.entries, dict) else {}
+                    previous_digest = entries.get(source["id"], {}).get("content_sha256") or ""
+                guide = self.guides.get(source, force=True)
+                current_digest = guide.get("content_sha256") if isinstance(guide, dict) else ""
+                if (isinstance(previous_digest, str) and isinstance(current_digest, str)
+                        and previous_digest and current_digest and previous_digest != current_digest):
+                    changed_sources.add(source["id"])
                 synchronized += 1
             except Exception as error:
                 errors.append({"source_id": source["id"], "error": str(error)})
                 print(f"Falha na sincronização XMLTV de {source['id']}: {error}", flush=True)
-        return {"synchronized": synchronized, "errors": errors, "license_blocked": False}
+        settings = snapshot.get("general_settings", DEFAULT_GENERAL_SETTINGS)
+        restarted = []
+        if changed_sources and settings.get("detect_cache_updates"):
+            restarted = self.supervisor.restart_for_sources(changed_sources)
+        return {"synchronized": synchronized, "errors": errors, "license_blocked": False,
+                "changed_sources": sorted(changed_sources), "restarted": restarted}
+
+    def save_general_settings(self, request: dict[str, Any]) -> dict[str, Any]:
+        settings = validate_general_settings(request)
+        with self.store.lock:
+            self.store.data["general_settings"] = settings
+            self.store.save()
+        self.guides.sync_seconds = settings["xmltv_sync_minutes"] * 60
+        restarted = self.supervisor.restart_all()
+        return {"result": "ok", "settings": settings, **restarted}
 
     def close(self) -> None:
         self.source_sync_stopping.set()
@@ -2114,10 +2190,13 @@ class Application:
             channels.append({**copy.deepcopy(channel), "programme_count": len(schedule),
                              "current": copy.deepcopy(current),
                              "schedule": copy.deepcopy(upcoming)})
+        sync_seconds = getattr(self.guides, "sync_seconds", SOURCE_SYNC_SECONDS)
+        if not isinstance(sync_seconds, (int, float)):
+            sync_seconds = SOURCE_SYNC_SECONDS
         return {
             "source_id": source_id, "fetched_at": int(guide["fetched_at"]),
-            "next_refresh_at": int(guide["fetched_at"] + SOURCE_SYNC_SECONDS),
-            "cache_seconds": SOURCE_SYNC_SECONDS,
+            "next_refresh_at": int(guide["fetched_at"] + sync_seconds),
+            "cache_seconds": sync_seconds,
             "bytes": guide["bytes"],
             "channel_count": len(channels),
             "programme_count": sum(map(len, guide["programmes"].values())),
@@ -2432,6 +2511,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/state":
                 state = APP.supervisor.state()
                 state["epg_health"] = APP.epg_health()
+                state["general_settings"] = APP.store.snapshot()["general_settings"]
                 state["sources"] = [{key: value for key, value in source.items()
                                      if key not in {"url", "parse_token"}}
                                     for source in APP.store.snapshot()["sources"]]
@@ -2545,6 +2625,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/users":
                 self._require_admin()
                 result = APP.save_user(request)
+            elif path == "/api/settings":
+                self._require_admin()
+                self._require_license()
+                result = APP.save_general_settings(request)
             elif path == "/api/update/apply":
                 self._require_admin()
                 result = request_native_update(APP.store.path.parent, str(request.get("tag") or ""))
@@ -2634,6 +2718,8 @@ document.body.insertAdjacentHTML('afterbegin','<aside class="app-rail"><div clas
 document.head.insertAdjacentHTML('beforeend','<style>.modal-back{left:224px;padding:16px;z-index:9}.modal.timeline-modal{width:calc(100vw - 256px);max-width:1500px}.timeline-corner,.timeline-channel{padding-left:14px}@media(max-width:900px){.modal-back{left:58px;padding:8px}.modal.timeline-modal{width:calc(100vw - 74px);height:calc(100vh - 16px);border-radius:10px}}@media(max-width:560px){.modal-back{left:0;padding:4px;z-index:11}.modal.timeline-modal{width:calc(100vw - 8px);height:calc(100vh - 8px)}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.top .brand{width:190px;height:46px;background:url("/assets/omniepg_logotipo_escuro.svg") center/contain no-repeat}.top .brand>*{display:none}.rail-brand{height:58px;background:url("/assets/omniepg_logotipo_transparente.svg") center/contain no-repeat}.rail-brand>*{display:none}.brand-image{width:190px;height:46px;object-fit:contain}@media(max-width:900px){.rail-brand{height:42px;background-image:url("/assets/omniepg_icone.svg");background-size:38px 38px;border-bottom:0}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.source-usage-summary{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:6px 9px;border:1px solid #bad7ea;border-radius:8px;background:#eef8fe;color:#275675;font-size:12px}.source-usage-summary b{font-size:15px;color:var(--blue)}</style>');
+document.getElementById('railUsers')?.insertAdjacentHTML('beforebegin','<button id="railSettings" class="rail-admin" onclick="openGeneralSettings()"><span class="rail-icon">⚙</span><span class="rail-label">Configurações gerais</span></button>');
+setInterval(()=>{const button=document.getElementById('railSettings');if(button)button.style.display=session?.user?.role==='admin'?'flex':'none'},500);
 let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},overviewMode='carriers',timelineData=null,timelineStart=0,timelineWindow=8*3600,timelineDay=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.head.insertAdjacentHTML('beforeend','<style>.overview-switch{display:flex;gap:6px;padding:5px;background:#dfe9f2;border-radius:11px}.overview-switch button{min-width:130px}.overview-switch button.active{background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff}.channel-table{width:100%;min-width:1120px;border-collapse:collapse}.channel-table th,.channel-table td{padding:12px 14px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}.channel-table th{background:#edf4fa;color:#526477;font-size:11px;text-transform:uppercase}.channel-table tr:hover td{background:#f8fbfd}.channel-actions{display:flex;gap:6px;justify-content:flex-end}.channel-actions button{padding:8px 10px}.view-empty{padding:42px;text-align:center;color:var(--muted)}@media(max-width:760px){.overview-switch{width:100%}.overview-switch button{flex:1;min-width:0}}</style>');
 document.querySelector('.summary')?.insertAdjacentHTML('afterend','<div class="panel-filter"><div class="overview-switch"><button id="viewCarriers" class="active" onclick="setOverviewMode(\'carriers\')">Por modulador</button><button id="viewChannels" onclick="setOverviewMode(\'channels\')">Por canal</button></div><input id="carrierFilter" placeholder="Filtrar por modulador, canal, multicast, TSID ou ONID" oninput="filterCarriers()"><button class="filter-pill active" onclick="setCarrierFilter(this,\'all\')">Todos</button><button class="filter-pill" onclick="setCarrierFilter(this,\'running\')">Em transmissão</button><button class="filter-pill" onclick="setCarrierFilter(this,\'error\')">Com erro</button></div>');
@@ -2693,12 +2779,14 @@ async function deleteLogo(button){if(!confirm('Remover o logo deste canal?'))ret
 async function actionCarrier(id,action){try{await api(`/api/carriers/${action}`,{method:'POST',body:JSON.stringify({id})});toast('Ação executada');setTimeout(refresh,400)}catch(e){toast(e.message,true)}}
 async function restartAllCarriers(){if(!confirm('Reiniciar agora todos os fluxos que deveriam estar ativos?'))return;try{const result=await api('/api/carriers/restart-all',{method:'POST',body:'{}'});toast(result.errors?.length?`${result.restarted} fluxo(s) reiniciado(s); ${result.errors.length} falha(s)`:`${result.restarted} fluxo(s) reiniciado(s)`);setTimeout(refresh,500)}catch(e){toast(e.message,true)}}
 async function deleteCarrier(id){if(!confirm('Excluir esta portadora?'))return;try{await api('/api/carriers/delete',{method:'POST',body:JSON.stringify({id})});toast('Portadora excluída');refresh()}catch(e){toast(e.message,true)}}
+function openGeneralSettings(){const s=state.general_settings||{xmltv_sync_minutes:60,emitter_refresh_minutes:180,emitter_retry_minutes:5,detect_cache_updates:true};modal(`<div class="guide-head"><div><h2>Configurações gerais</h2><div class="muted">Intervalos globais de sincronização e emissão do EPG</div></div><button onclick="closeModal()">Fechar</button></div><div class="form-grid" style="margin-top:18px"><label>Atualização das fontes XMLTV (minutos)<input id="gXmltvSync" type="number" min="5" max="10080" value="${s.xmltv_sync_minutes}"></label><label>Recarga do XMLTV pelo emissor (minutos)<input id="gEmitterRefresh" type="number" min="1" max="10080" value="${s.emitter_refresh_minutes}"></label><label>Nova tentativa após falha (minutos)<input id="gEmitterRetry" type="number" min="1" max="1440" value="${s.emitter_retry_minutes}"></label><label class="wide"><span>Detecção imediata do cache</span><select id="gDetectCache"><option value="1" ${s.detect_cache_updates?'selected':''}>Ativada — recarregar emissores quando o XMLTV mudar</option><option value="0" ${!s.detect_cache_updates?'selected':''}>Desativada — respeitar o intervalo do emissor</option></select></label></div><p class="muted">Ao salvar, os emissores ativos serão reiniciados uma vez para receber os novos intervalos. Com a detecção ativada, somente portadoras que usam uma fonte alterada são recarregadas após a sincronização.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveGeneralSettings()">Salvar e aplicar</button></div>`)}
+async function saveGeneralSettings(){if(!confirm('Salvar os intervalos e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_minutes:+el('gXmltvSync').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1'})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}}
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
 async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encodeURIComponent(id)}`);modal(`<h2>Logs do emissor</h2><pre style="background:#071b33;color:#dff4ff;padding:16px;border-radius:10px;max-height:65vh;overflow:auto;white-space:pre-wrap">${esc(j.log||'Sem logs.')}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true)}}
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
 async function runTvSimulator(){const id=el('tvCarrier')?.value;if(!id)return;toast('Capturando o transporte gerado…');try{const r=await api('/api/carriers/audit',{method:'POST',body:JSON.stringify({id,seconds:8})});showTvSimulatorReport(r)}catch(e){toast(e.message,true)}}
 function showTvSimulatorReport(r){const events=r.eit_present_following_events||[],pids=Object.entries(r.pid_packets||{}),continuity=Object.values(r.continuity_errors||{}).reduce((a,b)=>a+b,0);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">${esc(r.carrier.name)} · ${esc(r.carrier.destination)}:${r.carrier.port} · TSID ${r.carrier.transport_stream_id} · ONID ${r.carrier.original_network_id}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:16px;margin-top:14px;border-color:${r.ok?'#8ce2bd':'#f1a4aa'}"><b>${r.ok?'TRANSPORTE VÁLIDO':'FALHAS ENCONTRADAS'}</b><div class="muted">${r.packet_count} pacotes · CRC ${r.crc_errors} erro(s) · continuidade ${continuity} erro(s) · sinopses repetidas ${r.repeated_synopsis_prefixes}</div>${(r.errors||[]).map(e=>`<div class="error-text">${esc(e)}</div>`).join('')}</div><h3>PIDs recebidos</h3><div class="table-wrap"><table class="carrier-table" style="min-width:0"><thead><tr><th>PID</th><th>Pacotes</th><th>Interpretação</th></tr></thead><tbody>${pids.map(([pid,count])=>`<tr><td><b>${esc(pid)}</b></td><td>${count}</td><td>${pid==='0x0012'?'EIT — programação':pid==='0x0014'?'TDT/TOT — relógio':pid==='0x0011'?'SDT — serviços':pid==='0x0000'?'PAT':pid==='0x1FFF'?'Preenchimento':'PMT/sinalização'}</td></tr>`).join('')}</tbody></table></div><h3>Como a TV recebe os eventos</h3><div class="guide-list">${events.map(e=>`<div class="guide-item"><div><b>SID ${e.service_id}</b><br><span class="muted">Seção ${e.section_number} · evento ${e.event_id}</span></div><div><strong>${esc(e.title||'Sem título')}</strong><div><small>0x4D:</small> ${esc(e.short_text_0x4d||'—')}</div><div><small>0x4E:</small> ${esc(e.extended_text_0x4e||'—')}</div><div style="margin-top:6px"><b>Texto reconstruído pela TV:</b> ${esc(e.tv_text||'—')}</div><div class="muted">Descritores ${esc((e.descriptor_tags||[]).join(', '))} · categorias ${esc((e.content_categories_0x54||[]).join(', ')||'não informada')}</div></div></div>`).join('')||'<div class="empty">Nenhum evento presente/próximo encontrado.</div>'}</div><h3>Passthrough mínimo esperado</h3><pre>${esc((r.required_passthrough||[]).join('\n'))}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`,'publication-modal')}
-function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px;text-align:center"><img src="/assets/omniepg_logotipo_escuro.svg" alt="OMNIEPG" style="width:min(360px,90%);height:auto"><p><b>Versão:</b> 1.22.0</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
+function openAbout(){const admin=session.user?.role==='admin';modal(`<div class="guide-head"><div><h2>Sobre</h2><div class="muted">Informações do produto e atualizações</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:22px;margin-top:16px;text-align:center"><img src="/assets/omniepg_logotipo_escuro.svg" alt="OMNIEPG" style="width:min(360px,90%);height:auto"><p><b>Versão:</b> ${esc(state.version||'1.23.0')}</p><p><b>Developed by Julio Cortijo</b></p><div id="updateInfo" class="muted">${admin?'Consulte o repositório oficial para verificar uma nova versão.':'Somente administradores podem gerenciar atualizações.'}</div></div><div class="modal-actions"><button onclick="closeModal()">Fechar</button>${admin?'<button class="primary" onclick="checkUpdate()">Verificar atualização</button>':''}</div>`) }
 async function checkUpdate(){const info=el('updateInfo');if(info)info.textContent='Consultando a release oficial…';try{const u=await api('/api/update');const mode=u.install_mode==='native'?'Pacote nativo':'Docker';const last=u.last_update?.message?`<p class="muted">Última tentativa: ${esc(u.last_update.message)}</p>`:'';const action=u.update_available&&u.asset_available&&u.install_mode==='native'?`<button class="primary" onclick="applyUpdate('${esc(u.tag)}')">Atualizar agora para ${esc(u.latest_version)}</button>`:'';const docker=u.install_mode!=='native'&&u.update_available?'<p class="muted">Esta instalação usa Docker. Atualize a imagem pelo host para preservar volumes e rollback.</p>':'';info.innerHTML=`<p><b>Instalação:</b> ${mode}</p><p><b>Versão instalada:</b> ${esc(u.current_version)}</p><p><b>Última release:</b> ${esc(u.latest_version)}</p><p>${u.update_available?'Existe uma atualização disponível.':'O sistema está atualizado.'}</p>${docker}${last}${action}`}catch(e){if(info)info.innerHTML=`<span class="error-text">${esc(e.message)}</span>`}}
 async function applyUpdate(tag){if(!confirm(`Atualizar o OMNIEPG para ${tag}? Os serviços serão reiniciados durante a instalação.`))return;try{const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({tag})});toast(r.message||'Atualização solicitada');const info=el('updateInfo');if(info)info.innerHTML='<b>Atualização agendada.</b><p class="muted">O serviço será reiniciado após validar e instalar o pacote. Reabra o painel em alguns instantes.</p>'}catch(e){toast(e.message,true)}}
 function openLicense(){const license=state.license||{};modal(`<div class="guide-head"><div><h2>Licença do OMNIEPG</h2><div class="muted">${license.valid?`${license.channel_count}/${license.max_channels} canais utilizados`:`Bloqueada · ${esc(license.reason||'Licença inválida')}`}</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><p>Cole abaixo a chave gerada no EPG License Server. Ela será validada antes de substituir a chave atual.</p><label>Chave da licença<input id="epgLicenseKey" type="text" autocomplete="off" spellcheck="false" placeholder="EPG-..."></label><p class="muted">A chave instalada não é exibida pelo painel e não aparece nos logs ou na API.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLicenseKey()">Validar e salvar</button></div>`);el('epgLicenseKey').focus()}

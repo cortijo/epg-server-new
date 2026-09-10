@@ -166,6 +166,8 @@ struct EpgOnlyConfiguration {
     std::uint8_t signalVersion = 0;
     std::int32_t clockUtcOffsetMinutes = -180;
     std::int32_t clockCorrectionSeconds = 0;
+    std::uint32_t guideRefreshSeconds = 10800;
+    std::uint32_t guideRetrySeconds = 300;
     std::vector<EpgService> services;
 };
 
@@ -434,6 +436,10 @@ EpgOnlyConfiguration loadConfiguration() {
         signedEnvironment("EPG_CLOCK_UTC_OFFSET_MINUTES", -180, -720, 840));
     config.clockCorrectionSeconds = static_cast<std::int32_t>(
         signedEnvironment("EPG_CLOCK_CORRECTION_SECONDS", 0, -86400, 86400));
+    config.guideRefreshSeconds = static_cast<std::uint32_t>(
+        unsignedEnvironment("EPG_GUIDE_REFRESH_SECONDS", 10800, 60, 604800));
+    config.guideRetrySeconds = static_cast<std::uint32_t>(
+        unsignedEnvironment("EPG_GUIDE_RETRY_SECONDS", 300, 30, 86400));
     const std::string servicesJson = environment("EPG_SERVICES_JSON");
     if (!servicesJson.empty()) {
         Json::Value root;
@@ -514,6 +520,8 @@ StreamConfig injectorConfiguration(const EpgOnlyConfiguration& carrier,
     config.epgDefaultCategory = service.defaultCategory;
     config.epgClockUtcOffsetMinutes = carrier.clockUtcOffsetMinutes;
     config.epgClockCorrectionSeconds = carrier.clockCorrectionSeconds;
+    config.epgGuideRefreshSeconds = carrier.guideRefreshSeconds;
+    config.epgGuideRetrySeconds = carrier.guideRetrySeconds;
     config.serviceId = service.serviceId;
     config.epgTransportStreamId = carrier.transportStreamId;
     config.epgOriginalNetworkId = carrier.originalNetworkId;

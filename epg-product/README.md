@@ -220,6 +220,23 @@ modifica as fontes cadastradas.
 
 ## Operação
 
+### Configurações gerais de atualização
+
+Administradores podem abrir **Configurações gerais** na barra lateral e definir:
+
+- intervalo de sincronização das fontes XMLTV, em minutos (padrão: 60);
+- intervalo de recarga do XMLTV por cada emissor multicast (padrão: 180);
+- intervalo para nova tentativa do emissor após falha (padrão: 5);
+- detecção de nova versão do cache.
+
+Quando a detecção está ativada, a sincronização compara o SHA-256 da última
+cópia válida. Se o conteúdo mudou, somente as portadoras ativas que usam essa
+fonte são reiniciadas para carregar a nova grade imediatamente, sem aguardar o
+intervalo normal do emissor. Salvar novos intervalos reinicia uma vez os
+emissores que deveriam estar ativos, para propagar as configurações. Todos os
+valores ficam persistidos em `/data/epg-product.json` e participam do backup e
+da restauração.
+
 ```bash
 curl -fsS http://127.0.0.1:9100/health
 docker logs --since 10m epg-stream

@@ -98,6 +98,8 @@ struct StreamConfig {
     // Brazilian UTC-03:00 output. Correction keeps advancing with host time.
     int32_t epgClockUtcOffsetMinutes = -180;
     int32_t epgClockCorrectionSeconds = 0;
+    uint32_t epgGuideRefreshSeconds = 10800;
+    uint32_t epgGuideRetrySeconds = 300;
     std::vector<StreamOutputConfig> additionalOutputs;
 
     Json::Value toJson() const;
