@@ -110,6 +110,12 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(app.InstallError):
             app.parse_marked_json("only shell noise", "missing")
 
+    def test_large_inventory_keeps_marker_and_full_json(self):
+        errors = [{"message": "Canal sem programação " + ("x" * 300)} for _ in range(200)]
+        raw = "sudo notice\n__OMNIEPG_JSON__" + __import__("json").dumps({"errors": errors}) + "\n"
+        retained = raw[-(2 * 1024 * 1024):]
+        self.assertEqual(len(app.parse_marked_json(retained, "missing")["errors"]), 200)
+
 
 if __name__ == "__main__":
     unittest.main()

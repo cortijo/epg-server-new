@@ -20,7 +20,7 @@ from typing import Any
 
 import paramiko
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.RLock()
 HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)$")
@@ -136,7 +136,7 @@ def connect(config: dict[str, Any]) -> paramiko.SSHClient:
 
 
 def run(client: paramiko.SSHClient, command: str, timeout: int = 60,
-        stdin_data: str = "") -> tuple[int, str]:
+        stdin_data: str = "", output_limit: int = 12000) -> tuple[int, str]:
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
     stdout.channel.set_combine_stderr(True)
     if stdin_data:
@@ -144,7 +144,7 @@ def run(client: paramiko.SSHClient, command: str, timeout: int = 60,
         stdin.flush()
         stdin.channel.shutdown_write()
     output = stdout.read().decode("utf-8", "replace")
-    return stdout.channel.recv_exit_status(), output[-12000:]
+    return stdout.channel.recv_exit_status(), output[-output_limit:]
 
 
 def parse_os_release(text: str) -> dict[str, str]:
@@ -373,7 +373,8 @@ def inspect_existing(config: dict[str, Any]) -> dict[str, Any]:
     try:
         config_b64 = base64.b64encode(json.dumps({"container": config["container"], "panel_user": config["panel_user"], "panel_password": config["panel_password"]}).encode()).decode()
         script = REMOTE_INSPECT.replace('cfg=json.loads(sys.stdin.readline())', f'cfg=json.loads(base64.b64decode("{config_b64}"))')
-        code, output = run(client, "sudo -S -p '' python3 -", 30, config["sudo_password"] + "\n" + script)
+        code, output = run(client, "sudo -S -p '' python3 -", 30,
+                           config["sudo_password"] + "\n" + script, 2 * 1024 * 1024)
         if code:
             raise InstallError(f"Falha ao inspecionar a instalação: {output[-1000:]}")
         result = parse_marked_json(output, "O servidor não devolveu um inventário válido")
@@ -521,7 +522,7 @@ INDEX = r'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta 
 const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));let jobId='',timer=0;
 document.querySelector('header>div').textContent='Provisionamento remoto seguro por SSH · v1.0.1';
 el('ref').value='';el('ref').placeholder='Tag ou commit imutável, por exemplo epg-v1.22.0';
-document.querySelector('header>div').textContent='Instalação e gestão remota segura · v1.1.3';
+document.querySelector('header>div').textContent='Instalação e gestão remota segura · v1.1.4';
 document.head.insertAdjacentHTML('beforeend','<style>.mode-switch{display:flex;gap:8px;margin:18px 0}.mode-switch button{flex:1;border:1px solid var(--line)}.mode-switch button.active{background:var(--blue);color:#fff}.manage{display:none}.manage.show{display:block}.install-hidden{display:none!important}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{padding:14px;border:1px solid var(--line);border-radius:10px}.metric small{display:block;color:#657789}.metric b{display:block;font-size:19px;margin-top:5px}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px;border-top:1px solid var(--line);text-align:left}.management-actions{display:flex;gap:8px;flex-wrap:wrap}.management-actions button{background:#e8eef5}.danger{color:var(--red)}@media(max-width:720px){.metrics{grid-template-columns:1fr 1fr}}</style>');
 const main=document.querySelector('main.wrap'),notice=main.querySelector('.notice'),installCards=[...main.querySelectorAll(':scope>.card')];notice.insertAdjacentHTML('afterend','<div class="mode-switch"><button id="modeNew" class="active" onclick="setMode(\'new\')">Nova instalação</button><button id="modeManage" onclick="setMode(\'manage\')">Instalação existente</button></div><section id="manageView" class="manage"><div class="card"><h2>Servidor OMNIEPG existente</h2><div class="grid"><label>Host ou IP<input id="mHost"></label><label>Porta SSH<input id="mPort" type="number" value="22"></label><label>Usuário SSH<input id="mUsername"></label><label>Senha SSH<input id="mPassword" type="password"></label><label>Senha sudo<input id="mSudo" type="password"></label><label>Container<input id="mContainer" value="epg-stream"></label><label>Usuário do painel<input id="mPanelUser" value="epgadmin"></label><label>Senha do painel<input id="mPanelPassword" type="password"></label><label>Fingerprint<input id="mFingerprint" readonly></label></div><div class="actions"><button onclick="manageProbe()">Identificar</button><button class="primary" id="manageConnect" disabled onclick="inspectManage()">Conectar e analisar</button></div></div><div id="manageDashboard"></div></section>');
 function setMode(mode){const manage=mode==='manage';el('modeNew').classList.toggle('active',!manage);el('modeManage').classList.toggle('active',manage);el('manageView').classList.toggle('show',manage);installCards.slice(0,2).forEach(card=>card.classList.toggle('install-hidden',manage))}

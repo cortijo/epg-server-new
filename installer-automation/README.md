@@ -84,5 +84,5 @@ XMLTV, portadoras, SID, TSID, ONID ou PIDs.
 ```bash
 cd installer-automation
 python3 -m unittest -v test_app.py
-docker build -t omniepg-installer:v1.1.3 -f Dockerfile ..
+docker build -t omniepg-installer:v1.1.4 -f Dockerfile ..
 ```

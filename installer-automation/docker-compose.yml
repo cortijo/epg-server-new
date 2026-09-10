@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: installer-automation/Dockerfile
-    image: omniepg-installer:v1.1.3
+    image: omniepg-installer:v1.1.4
     container_name: omniepg-installer
     restart: unless-stopped
     ports:
