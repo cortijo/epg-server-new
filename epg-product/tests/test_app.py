@@ -730,6 +730,15 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('<h2>Fontes XMLTV</h2><div class="actions">', INDEX_HTML)
         self.assertIn('<button onclick="closeModal()">Fechar</button>', INDEX_HTML)
         self.assertIn("Histórico de sincronização", INDEX_HTML)
+
+    def test_xmltv_source_usage_lists_direct_and_inherited_channels(self):
+        self.assertIn("function sourceUsage(sourceId)", INDEX_HTML)
+        self.assertIn("service.source_id||carrier.source_id", INDEX_HTML)
+        self.assertIn("Ver canais alimentados", INDEX_HTML)
+        self.assertIn("Direta no canal", INDEX_HTML)
+        self.assertIn("Herdada da portadora", INDEX_HTML)
+        self.assertIn("TSID ${carrier.transport_stream_id}", INDEX_HTML)
+        self.assertIn("ONID ${carrier.original_network_id}", INDEX_HTML)
         self.assertIn("function openSourceHistory(sourceId='')", INDEX_HTML)
         self.assertIn('<button onclick="editSource()">+ Nova fonte</button>', INDEX_HTML)
 
