@@ -726,6 +726,16 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("services:original.services.map(service=>({...service,id:''}))", INDEX_HTML)
         self.assertIn("não altera a portadora original", INDEX_HTML)
 
+    def test_overview_can_manage_carriers_or_channels(self):
+        self.assertIn('id="viewCarriers"', INDEX_HTML)
+        self.assertIn('id="viewChannels"', INDEX_HTML)
+        self.assertIn("function setOverviewMode(mode)", INDEX_HTML)
+        self.assertIn("function renderChannelOverview(carriers)", INDEX_HTML)
+        self.assertIn("async function editChannel(carrierId,serviceId)", INDEX_HTML)
+        self.assertIn("async function saveChannel(carrierId,serviceId)", INDEX_HTML)
+        self.assertIn("async function deleteChannel(carrierId,serviceId)", INDEX_HTML)
+        self.assertIn("A portadora precisa manter ao menos um canal", INDEX_HTML)
+
     def test_xmltv_sources_has_explicit_close_button(self):
         self.assertIn('<h2>Fontes XMLTV</h2><div class="actions">', INDEX_HTML)
         self.assertIn('<button onclick="closeModal()">Fechar</button>', INDEX_HTML)
