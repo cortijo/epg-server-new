@@ -37,6 +37,7 @@ constexpr const char* kDefaultSourceUrl =
     "https://github.com/limaalef/BrazilTVEPG/raw/refs/heads/main/claro.xml";
 
 volatile std::sig_atomic_t gStopRequested = 0;
+volatile std::sig_atomic_t gRefreshRequested = 0;
 
 class CurlRuntime {
 public:
@@ -48,8 +49,12 @@ public:
     ~CurlRuntime() { curl_global_cleanup(); }
 };
 
-void handleSignal(int) {
-    gStopRequested = 1;
+void handleSignal(int signalNumber) {
+    if (signalNumber == SIGUSR1) {
+        gRefreshRequested = 1;
+    } else {
+        gStopRequested = 1;
+    }
 }
 
 std::string environment(const char* name, const std::string& fallback = {}) {
@@ -659,6 +664,7 @@ int main() {
 
             std::signal(SIGINT, handleSignal);
             std::signal(SIGTERM, handleSignal);
+            std::signal(SIGUSR1, handleSignal);
 
             const std::uint64_t datagramIntervalNanoseconds =
                 (kDatagramSize * 8ULL * kNanosecondsPerSecond) / bitrate;
@@ -692,6 +698,12 @@ int main() {
             auto nextDiagnosticPoll = std::chrono::steady_clock::now();
 
             while (!gStopRequested) {
+                if (gRefreshRequested) {
+                    gRefreshRequested = 0;
+                    for (auto& injector : injectors) injector->requestRefresh();
+                    std::cerr << "EPG hot reload solicitado; multicast mantido ativo"
+                              << std::endl;
+                }
                 const auto loopNow = std::chrono::steady_clock::now();
                 if (!diagnosticBase.empty() && !diagnosticStream.is_open() &&
                     loopNow >= nextDiagnosticPoll) {

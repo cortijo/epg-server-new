@@ -231,13 +231,14 @@ Administradores podem abrir **Configurações gerais** na barra lateral e defini
 - intervalo para nova tentativa do emissor após falha (padrão: 5);
 - detecção de nova versão do cache.
 
-Quando a detecção está ativada, a sincronização compara o SHA-256 da última
-cópia válida. Se o conteúdo mudou, somente as portadoras ativas que usam essa
-fonte são reiniciadas para carregar a nova grade imediatamente, sem aguardar o
-intervalo normal do emissor. Salvar novos intervalos reinicia uma vez os
-emissores que deveriam estar ativos, para propagar as configurações. Todos os
-valores ficam persistidos em `/data/epg-product.json` e participam do backup e
-da restauração.
+Quando a detecção está ativada, a sincronização compara uma impressão digital
+semântica dos canais e programas da última cópia válida. Alterações apenas na
+formatação do XML ou em metadados do provedor não provocam recarga. Se a grade
+real mudou, somente as portadoras ativas que usam essa fonte recebem `SIGUSR1`:
+o emissor baixa e recompõe o EIT em memória sem trocar o PID do processo nem
+interromper o envio multicast. Salvar novos intervalos ainda reinicia uma vez
+os emissores ativos para propagar os parâmetros. Todos os valores ficam
+persistidos em `/data/epg-product.json` e participam do backup e da restauração.
 
 ```bash
 curl -fsS http://127.0.0.1:9100/health

@@ -917,7 +917,8 @@ struct EpgInjector::Impl {
             bool attemptedDownload = false;
             bool downloadSucceeded = false;
             std::string error;
-            if (cachedProgrammes.empty() || steadyNow >= nextGuideDownload) {
+            const bool forcedRefresh = refreshRequested.exchange(false);
+            if (forcedRefresh || cachedProgrammes.empty() || steadyNow >= nextGuideDownload) {
                 attemptedDownload = true;
                 std::string xml;
                 std::vector<Programme> programmes;
@@ -1005,8 +1006,15 @@ struct EpgInjector::Impl {
             std::unique_lock<std::mutex> lock(waitMutex);
             // Rebuild p/f every minute from the cached guide without repeatedly
             // downloading XMLTV.  This keeps the current/next event fresh.
-            wake.wait_for(lock, std::chrono::minutes(1), [&] { return stop.load(); });
+            wake.wait_for(lock, std::chrono::minutes(1), [&] {
+                return stop.load() || refreshRequested.load();
+            });
         }
+    }
+
+    void requestRefresh() {
+        refreshRequested.store(true);
+        wake.notify_all();
     }
 
     void publishAudit() {
@@ -1105,6 +1113,7 @@ struct EpgInjector::Impl {
     std::vector<Programme> cachedProgrammes;
     std::chrono::steady_clock::time_point nextGuideDownload {};
     std::atomic<bool> stop {false};
+    std::atomic<bool> refreshRequested {false};
     std::thread worker;
     std::mutex waitMutex;
     std::condition_variable wake;
@@ -1129,6 +1138,9 @@ struct EpgInjector::Impl {
 EpgInjector::EpgInjector(const StreamConfig& config) : impl_(new Impl(config)) {}
 EpgInjector::~EpgInjector() = default;
 bool EpgInjector::enabled() const { return impl_ && impl_->active; }
+void EpgInjector::requestRefresh() {
+    if (impl_) impl_->requestRefresh();
+}
 bool EpgInjector::takePacket(std::array<std::uint8_t, 188>& packet,
                              std::uint64_t now) {
     return impl_ && impl_->take(packet, now);

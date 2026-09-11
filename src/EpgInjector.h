@@ -67,6 +67,7 @@ public:
     EpgInjector& operator=(const EpgInjector&) = delete;
 
     bool enabled() const;
+    void requestRefresh();
     bool takePacket(std::array<std::uint8_t, 188>& packet,
                     std::uint64_t monotonicNanoseconds);
 

@@ -13,7 +13,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (
-    ApiError, Application, GuideCache, INDEX_HTML, Store, Supervisor, parse_xmltv, parse_xmltv_datetime,
+    ApiError, Application, GuideCache, INDEX_HTML, Store, Supervisor,
+    guide_content_fingerprint, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
     parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
     validate_source, validate_config_backup, validate_general_settings,
@@ -22,6 +23,42 @@ from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_epg_fingerprint_ignores_xml_formatting_but_detects_schedule_changes(self):
+        first = b'''<tv generated-at="one">
+          <channel id="sport"><display-name>Sport</display-name></channel>
+          <programme channel="sport" start="20260911120000 +0000" stop="20260911130000 +0000">
+            <title>Jogo</title><desc>Ao vivo</desc>
+          </programme>
+        </tv>'''
+        reformatted = b'''<tv generated-at="two"><programme stop="20260911130000 +0000"
+          start="20260911120000 +0000" channel="sport"><desc>Ao vivo</desc><title>Jogo</title>
+          </programme><channel id="sport"><display-name>Sport</display-name></channel></tv>'''
+        changed = reformatted.replace(b"Ao vivo", b"Melhores momentos")
+        self.assertEqual(
+            guide_content_fingerprint(parse_xmltv(first, bounded=False)),
+            guide_content_fingerprint(parse_xmltv(reformatted, bounded=False)),
+        )
+        self.assertNotEqual(
+            guide_content_fingerprint(parse_xmltv(first, bounded=False)),
+            guide_content_fingerprint(parse_xmltv(changed, bounded=False)),
+        )
+
+    def test_source_refresh_signals_running_emitter_without_restarting_it(self):
+        supervisor = object.__new__(Supervisor)
+        supervisor.lock = threading.RLock()
+        supervisor.store = mock.Mock()
+        supervisor.store.snapshot.return_value = {"carriers": [{
+            "id": "carrier", "source_id": "source-a",
+            "services": [{"source_id": "source-a"}],
+        }]}
+        process = mock.Mock()
+        process.poll.return_value = None
+        supervisor.processes = {"carrier": process}
+        with mock.patch("app.HOT_RELOAD_SIGNAL", 10):
+            refreshed = supervisor.refresh_for_sources({"source-a"})
+        self.assertEqual(refreshed, ["carrier"])
+        process.send_signal.assert_called_once_with(10)
+
     def test_general_settings_are_validated_persisted_and_visible(self):
         settings = validate_general_settings({
             "xmltv_sync_minutes": 30, "emitter_refresh_minutes": 45,

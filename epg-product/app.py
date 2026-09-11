@@ -38,8 +38,9 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.23.1"
+PRODUCT_VERSION = "1.23.2"
 PRODUCT_DEVELOPER = "Julio Cortijo"
+HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
 DEFAULT_SOURCE = {
     "id": "braziltvepg",
@@ -288,6 +289,36 @@ def parse_xmltv(payload: bytes, bounded: bool = True) -> dict[str, Any]:
     for items in programmes.values():
         items.sort(key=lambda item: (item["start"], item["stop"]))
     return {"channels": channels, "programmes": programmes}
+
+
+def guide_content_fingerprint(parsed: dict[str, Any]) -> str:
+    """Hash only data that changes the EPG seen by receivers.
+
+    XML formatting, element order and provider generation timestamps must not
+    trigger an emitter reload.
+    """
+    channels = sorted(
+        (str(channel_id), str(channel.get("name") or ""))
+        for channel_id, channel in parsed.get("channels", {}).items()
+    )
+    programmes = sorted(
+        (
+            str(item.get("channel_id") or channel_id),
+            int(item.get("start") or 0),
+            int(item.get("stop") or 0),
+            str(item.get("title") or ""),
+            str(item.get("subtitle") or ""),
+            str(item.get("description") or ""),
+            str(item.get("category") or ""),
+        )
+        for channel_id, items in parsed.get("programmes", {}).items()
+        for item in items
+    )
+    canonical = json.dumps(
+        {"channels": channels, "programmes": programmes},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _local_tag(element: ET.Element) -> str:
@@ -1046,7 +1077,8 @@ class GuideCache:
             previous = self.entries.get(source_id)
             self.entries[source_id] = parsed
             self.errors.pop(source_id, None)
-        digest = hashlib.sha256(payload).hexdigest()
+        digest = guide_content_fingerprint(parsed)
+        payload_digest = hashlib.sha256(payload).hexdigest()
         previous_digest = str(previous.get("content_sha256") or "") if previous else ""
         parsed["content_sha256"] = digest
         self._persist_guide(source_id, payload)
@@ -1055,7 +1087,8 @@ class GuideCache:
                            "status": "success", "started_at": started_at, "finished_at": now_epoch(),
                            "duration_ms": max(0, int((time.time() - started_at) * 1000)),
                            "changed": not previous_digest or previous_digest != digest,
-                           "sha256": digest, "bytes": len(payload),
+                           "sha256": digest, "payload_sha256": payload_digest,
+                           "bytes": len(payload),
                            "channels": len(parsed["channels"]),
                            "programmes": sum(map(len, parsed["programmes"].values()))})
         return parsed
@@ -1334,23 +1367,25 @@ class Supervisor:
         return {"result": "ok" if not errors else "partial",
                 "restarted": len(restarted), "errors": errors}
 
-    def restart_for_sources(self, source_ids: set[str]) -> list[str]:
+    def refresh_for_sources(self, source_ids: set[str]) -> list[str]:
         snapshot = self.store.snapshot()
         affected = [carrier for carrier in snapshot["carriers"] if any(
             (service.get("source_id") or carrier.get("source_id")) in source_ids
             for service in carrier.get("services", []))]
-        restarted: list[str] = []
+        refreshed: list[str] = []
         with self.lock:
             for carrier in affected:
                 process = self.processes.get(carrier["id"])
                 if not process or process.poll() is not None:
                     continue
                 try:
-                    self._start_locked(carrier)
-                    restarted.append(carrier["id"])
+                    if HOT_RELOAD_SIGNAL is None:
+                        raise RuntimeError("SIGUSR1 não está disponível nesta plataforma")
+                    process.send_signal(HOT_RELOAD_SIGNAL)
+                    refreshed.append(carrier["id"])
                 except Exception as error:
-                    print(f"Falha ao recarregar cache em {carrier['id']}: {error}", flush=True)
-        return restarted
+                    print(f"Falha no hot reload do cache em {carrier['id']}: {error}", flush=True)
+        return refreshed
 
     def remove(self, carrier_id: str) -> None:
         with self.lock:
@@ -1492,11 +1527,11 @@ class Application:
                 errors.append({"source_id": source["id"], "error": str(error)})
                 print(f"Falha na sincronização XMLTV de {source['id']}: {error}", flush=True)
         settings = snapshot.get("general_settings", DEFAULT_GENERAL_SETTINGS)
-        restarted = []
+        refreshed = []
         if changed_sources and settings.get("detect_cache_updates"):
-            restarted = self.supervisor.restart_for_sources(changed_sources)
+            refreshed = self.supervisor.refresh_for_sources(changed_sources)
         return {"synchronized": synchronized, "errors": errors, "license_blocked": False,
-                "changed_sources": sorted(changed_sources), "restarted": restarted}
+                "changed_sources": sorted(changed_sources), "refreshed": refreshed}
 
     def save_general_settings(self, request: dict[str, Any]) -> dict[str, Any]:
         settings = validate_general_settings(request)
@@ -2808,7 +2843,7 @@ async function deleteLogo(button){if(!confirm('Remover o logo deste canal?'))ret
 async function actionCarrier(id,action){try{await api(`/api/carriers/${action}`,{method:'POST',body:JSON.stringify({id})});toast('Ação executada');setTimeout(refresh,400)}catch(e){toast(e.message,true)}}
 async function restartAllCarriers(){if(!confirm('Reiniciar agora todos os fluxos que deveriam estar ativos?'))return;try{const result=await api('/api/carriers/restart-all',{method:'POST',body:'{}'});toast(result.errors?.length?`${result.restarted} fluxo(s) reiniciado(s); ${result.errors.length} falha(s)`:`${result.restarted} fluxo(s) reiniciado(s)`);setTimeout(refresh,500)}catch(e){toast(e.message,true)}}
 async function deleteCarrier(id){if(!confirm('Excluir esta portadora?'))return;try{await api('/api/carriers/delete',{method:'POST',body:JSON.stringify({id})});toast('Portadora excluída');refresh()}catch(e){toast(e.message,true)}}
-function openGeneralSettings(){const s=state.general_settings||{xmltv_sync_mode:'interval',xmltv_sync_minutes:60,xmltv_daily_time:'04:15',emitter_refresh_minutes:180,emitter_retry_minutes:5,detect_cache_updates:true};modal(`<div class="guide-head"><div><h2>Configurações gerais</h2><div class="muted">Sincronização das fontes e atualização dos emissores</div></div><button onclick="closeModal()">Fechar</button></div><div class="form-grid" style="margin-top:18px"><label>Modo de atualização das fontes<select id="gXmltvMode" onchange="generalSyncModeChanged()"><option value="interval" ${s.xmltv_sync_mode==='interval'?'selected':''}>Por intervalo</option><option value="daily" ${s.xmltv_sync_mode==='daily'?'selected':''}>Diariamente em horário definido</option></select></label><label id="gIntervalField">Intervalo XMLTV (minutos)<input id="gXmltvSync" type="number" min="5" max="10080" value="${s.xmltv_sync_minutes}"></label><label id="gDailyField">Horário diário — America/Sao_Paulo<input id="gXmltvDaily" type="time" value="${esc(s.xmltv_daily_time||'04:15')}"></label><label>Recarga pelo emissor (minutos)<input id="gEmitterRefresh" type="number" min="1" max="10080" value="${s.emitter_refresh_minutes}"></label><label>Nova tentativa após falha (minutos)<input id="gEmitterRetry" type="number" min="1" max="1440" value="${s.emitter_retry_minutes}"></label><label class="wide"><span>Detecção imediata do cache</span><select id="gDetectCache"><option value="1" ${s.detect_cache_updates?'selected':''}>Ativada — recarregar emissores quando o XMLTV mudar</option><option value="0" ${!s.detect_cache_updates?'selected':''}>Desativada — respeitar o intervalo do emissor</option></select></label></div><p class="muted">No modo diário, a fonte é sincronizada uma vez por dia no horário escolhido. Se o servidor estava desligado nesse horário, a sincronização pendente acontece após iniciar. Ao salvar, os emissores ativos reiniciam uma vez para receber os novos parâmetros.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveGeneralSettings()">Salvar e aplicar</button></div>`);generalSyncModeChanged()}
+function openGeneralSettings(){const s=state.general_settings||{xmltv_sync_mode:'interval',xmltv_sync_minutes:60,xmltv_daily_time:'04:15',emitter_refresh_minutes:180,emitter_retry_minutes:5,detect_cache_updates:true};modal(`<div class="guide-head"><div><h2>Configurações gerais</h2><div class="muted">Sincronização das fontes e atualização dos emissores</div></div><button onclick="closeModal()">Fechar</button></div><div class="form-grid" style="margin-top:18px"><label>Modo de atualização das fontes<select id="gXmltvMode" onchange="generalSyncModeChanged()"><option value="interval" ${s.xmltv_sync_mode==='interval'?'selected':''}>Por intervalo</option><option value="daily" ${s.xmltv_sync_mode==='daily'?'selected':''}>Diariamente em horário definido</option></select></label><label id="gIntervalField">Intervalo XMLTV (minutos)<input id="gXmltvSync" type="number" min="5" max="10080" value="${s.xmltv_sync_minutes}"></label><label id="gDailyField">Horário diário — America/Sao_Paulo<input id="gXmltvDaily" type="time" value="${esc(s.xmltv_daily_time||'04:15')}"></label><label>Recarga pelo emissor (minutos)<input id="gEmitterRefresh" type="number" min="1" max="10080" value="${s.emitter_refresh_minutes}"></label><label>Nova tentativa após falha (minutos)<input id="gEmitterRetry" type="number" min="1" max="1440" value="${s.emitter_retry_minutes}"></label><label class="wide"><span>Detecção imediata do cache</span><select id="gDetectCache"><option value="1" ${s.detect_cache_updates?'selected':''}>Ativada — hot reload sem interromper o multicast</option><option value="0" ${!s.detect_cache_updates?'selected':''}>Desativada — respeitar o intervalo do emissor</option></select></label></div><p class="muted">No modo diário, a fonte é sincronizada uma vez por dia no horário escolhido. Se o servidor estava desligado nesse horário, a sincronização pendente acontece após iniciar. Mudanças reais na grade são carregadas a quente, mantendo o mesmo processo e o envio multicast. Ao salvar estas configurações, os emissores ativos reiniciam uma vez para receber os novos parâmetros.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveGeneralSettings()">Salvar e aplicar</button></div>`);generalSyncModeChanged()}
 function generalSyncModeChanged(){const daily=el('gXmltvMode')?.value==='daily';if(el('gIntervalField'))el('gIntervalField').style.display=daily?'none':'';if(el('gDailyField'))el('gDailyField').style.display=daily?'':'none'}
 async function saveGeneralSettings(){if(!confirm('Salvar a programação e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1'})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}}
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
