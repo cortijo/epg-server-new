@@ -225,6 +225,8 @@ modifica as fontes cadastradas.
 Administradores podem abrir **Configurações gerais** na barra lateral e definir:
 
 - intervalo de sincronização das fontes XMLTV, em minutos (padrão: 60);
+- alternativamente, sincronização diária em um horário definido no fuso
+  `America/Sao_Paulo` (padrão sugerido: 04:15);
 - intervalo de recarga do XMLTV por cada emissor multicast (padrão: 180);
 - intervalo para nova tentativa do emissor após falha (padrão: 5);
 - detecção de nova versão do cache.

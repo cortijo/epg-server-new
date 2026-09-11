@@ -33,6 +33,23 @@ class EpgProductTests(unittest.TestCase):
             self.assertEqual(store.snapshot()["general_settings"]["emitter_refresh_minutes"], 180)
         self.assertIn("Configurações gerais", INDEX_HTML)
         self.assertIn("detect_cache_updates", INDEX_HTML)
+        self.assertIn("Diariamente em horário definido", INDEX_HTML)
+
+    def test_daily_xmltv_sync_uses_sao_paulo_clock_and_rolls_to_next_day(self):
+        zone = timezone(timedelta(hours=-3))
+        cache = GuideCache(sync_mode="daily", daily_time="04:15")
+        before = datetime(2026, 9, 11, 3, 0, tzinfo=zone).timestamp()
+        after = datetime(2026, 9, 11, 5, 0, tzinfo=zone).timestamp()
+        self.assertEqual(
+            cache.next_refresh_at(before),
+            int(datetime(2026, 9, 11, 4, 15, tzinfo=zone).timestamp()),
+        )
+        self.assertEqual(
+            cache.next_refresh_at(after),
+            int(datetime(2026, 9, 12, 4, 15, tzinfo=zone).timestamp()),
+        )
+        with self.assertRaises(ApiError):
+            validate_general_settings({"xmltv_sync_mode": "daily", "xmltv_daily_time": "25:00"})
 
     def test_emitter_environment_receives_configured_refresh_intervals(self):
         supervisor = object.__new__(Supervisor)
