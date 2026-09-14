@@ -18,11 +18,36 @@ from app import (
     normalize_uploaded_xmltv, password_matches, password_record,
     parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
     validate_source, validate_config_backup, validate_general_settings,
+    openapi_document, public_carrier,
 )
 from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_rest_api_v1_contract_covers_management_and_queries(self):
+        document = openapi_document()
+        self.assertEqual(document["openapi"], "3.0.3")
+        self.assertEqual(document["info"]["version"], "1.24.0")
+        for path in (
+            "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
+            "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
+            "/api/v1/guides", "/api/v1/errors", "/api/v1/publications",
+            "/api/v1/users", "/api/v1/license",
+        ):
+            self.assertIn(path, document["paths"])
+        self.assertEqual(
+            document["components"]["securitySchemes"]["basicAuth"]["scheme"], "basic")
+
+    def test_rest_api_public_carrier_hides_internal_logo_paths(self):
+        carrier = {"id": "c1", "services": [{
+            "id": "s1", "logo": {"enabled": True, "path": "/data/private.png",
+                                      "variants": {"5": "/data/private-5.png"}, "width": 64},
+        }]}
+        exposed = public_carrier(carrier)
+        self.assertNotIn("path", exposed["services"][0]["logo"])
+        self.assertNotIn("variants", exposed["services"][0]["logo"])
+        self.assertEqual(exposed["services"][0]["logo"]["width"], 64)
+
     def test_monitoring_is_the_initial_page_with_channels_errors_and_full_guide(self):
         self.assertIn("let mainPage='monitor'", INDEX_HTML)
         self.assertIn("firstRailOperation.id='railMonitor'", INDEX_HTML)

@@ -38,7 +38,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.23.6"
+PRODUCT_VERSION = "1.24.0"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -215,6 +215,21 @@ def public_user(user: dict[str, Any]) -> dict[str, Any]:
         key: copy.deepcopy(user.get(key))
         for key in ("id", "username", "display_name", "role", "enabled", "created_at", "updated_at")
     }
+
+
+def public_channel(channel: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(channel)
+    logo = result.get("logo")
+    if isinstance(logo, dict):
+        result["logo"] = {key: value for key, value in logo.items()
+                          if key not in {"path", "variants"}}
+    return result
+
+
+def public_carrier(carrier: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(carrier)
+    result["services"] = [public_channel(item) for item in result.get("services", [])]
+    return result
 
 
 def normalized_username(value: Any) -> str:
@@ -2230,6 +2245,49 @@ class Application:
             raise ApiError("Logo não encontrado", HTTPStatus.NOT_FOUND)
         return path
 
+    def carrier(self, carrier_id: str) -> dict[str, Any]:
+        carrier = next((item for item in self.store.snapshot()["carriers"]
+                        if item["id"] == carrier_id), None)
+        if not carrier:
+            raise ApiError("Portadora não encontrada", HTTPStatus.NOT_FOUND)
+        return carrier
+
+    def save_channel(self, carrier_id: str, request: dict[str, Any],
+                     service_id: str = "") -> dict[str, Any]:
+        carrier = self.carrier(carrier_id)
+        services = copy.deepcopy(carrier["services"])
+        index = next((position for position, item in enumerate(services)
+                      if item["id"] == service_id), None)
+        if service_id and index is None:
+            raise ApiError("Canal não encontrado", HTTPStatus.NOT_FOUND)
+        candidate = copy.deepcopy(request)
+        candidate["id"] = service_id if service_id else str(candidate.get("id") or "")
+        if index is None:
+            services.append(candidate)
+        else:
+            # PUT accepts a complete representation, while retaining logo metadata.
+            candidate["logo"] = copy.deepcopy(services[index].get("logo", {}))
+            services[index] = candidate
+        result = self.save_carrier({**carrier, "services": services})
+        saved = self.carrier(carrier_id)
+        if index is None:
+            channel = next((item for item in saved["services"]
+                            if item["service_id"] == int(request.get("service_id", 0))), None)
+        else:
+            channel = next(item for item in saved["services"] if item["id"] == service_id)
+        return {"result": result["result"], "carrier_id": carrier_id,
+                "channel": public_channel(channel or {})}
+
+    def delete_channel(self, carrier_id: str, service_id: str) -> dict[str, Any]:
+        carrier = self.carrier(carrier_id)
+        services = [item for item in carrier["services"] if item["id"] != service_id]
+        if len(services) == len(carrier["services"]):
+            raise ApiError("Canal não encontrado", HTTPStatus.NOT_FOUND)
+        if not services:
+            raise ApiError("A portadora precisa manter ao menos um canal")
+        self.save_carrier({**carrier, "services": services})
+        return {"result": "ok", "carrier_id": carrier_id, "channel_id": service_id}
+
     def delete_carrier(self, carrier_id: str) -> dict[str, Any]:
         self.supervisor.remove(carrier_id)
         with self.store.lock:
@@ -2431,11 +2489,95 @@ class Application:
                             "error": sum(c["status"] == "error" for c in carriers)}}
 
 
+def openapi_document() -> dict[str, Any]:
+    """Machine-readable contract for integrations; no runtime dependency required."""
+    operations = {
+        "/api/v1/system": {"get": "Estado, licença e saúde do sistema"},
+        "/api/v1/settings": {"get": "Consultar configurações", "put": "Atualizar configurações"},
+        "/api/v1/sources": {"get": "Listar fontes XMLTV", "post": "Cadastrar fonte XMLTV"},
+        "/api/v1/sources/{source_id}": {"get": "Consultar fonte", "put": "Editar fonte", "delete": "Excluir fonte"},
+        "/api/v1/sources/{source_id}/catalog": {"get": "Consultar canais e programas da fonte"},
+        "/api/v1/sources/{source_id}/sync": {"post": "Sincronizar fonte imediatamente"},
+        "/api/v1/sources/{source_id}/history": {"get": "Consultar histórico de sincronização"},
+        "/api/v1/carriers": {"get": "Listar portadoras", "post": "Cadastrar portadora"},
+        "/api/v1/carriers/{carrier_id}": {"get": "Consultar portadora", "put": "Editar portadora", "delete": "Excluir portadora"},
+        "/api/v1/carriers/{carrier_id}/channels": {"get": "Listar canais", "post": "Cadastrar canal"},
+        "/api/v1/carriers/{carrier_id}/channels/{channel_id}": {"get": "Consultar canal", "put": "Editar canal", "delete": "Excluir canal"},
+        "/api/v1/carriers/{carrier_id}/channels/{channel_id}/logo": {"get": "Baixar logo", "put": "Enviar logo PNG em base64", "delete": "Excluir logo"},
+        "/api/v1/carriers/{carrier_id}/guide": {"get": "Consultar grade da portadora"},
+        "/api/v1/carriers/{carrier_id}/logs": {"get": "Consultar log do emissor"},
+        "/api/v1/carriers/{carrier_id}/actions/{action}": {"post": "Iniciar, parar, reiniciar ou auditar"},
+        "/api/v1/carriers/actions/restart-all": {"post": "Reiniciar todos os emissores"},
+        "/api/v1/channels": {"get": "Listar todos os canais"},
+        "/api/v1/guides": {"get": "Consultar grade consolidada"},
+        "/api/v1/errors": {"get": "Consultar erros de EPG"},
+        "/api/v1/publications": {"get": "Listar publicações", "post": "Cadastrar publicação"},
+        "/api/v1/publications/{publication_id}": {"put": "Editar publicação", "delete": "Excluir publicação"},
+        "/api/v1/publications/{publication_id}/versions": {"post": "Enviar uma versão XMLTV"},
+        "/api/v1/publications/{publication_id}/versions/{version_id}": {"delete": "Excluir versão XMLTV"},
+        "/api/v1/users": {"get": "Listar usuários", "post": "Cadastrar usuário"},
+        "/api/v1/users/{user_id}": {"put": "Editar usuário", "delete": "Excluir usuário"},
+        "/api/v1/license": {"get": "Consultar licença", "put": "Instalar chave"},
+        "/api/v1/update": {"get": "Consultar atualização"},
+        "/api/v1/update/apply": {"post": "Aplicar atualização nativa"},
+        "/api/v1/backup": {"get": "Baixar backup completo"},
+        "/api/v1/restore": {"post": "Restaurar backup completo"},
+    }
+    paths: dict[str, Any] = {}
+    for path, methods in operations.items():
+        paths[path] = {}
+        for method, summary in methods.items():
+            operation: dict[str, Any] = {
+                "summary": summary, "security": [{"basicAuth": []}],
+                "responses": {"200": {"description": "Operação concluída"},
+                              "400": {"description": "Requisição inválida"},
+                              "401": {"description": "Autenticação necessária"},
+                              "402": {"description": "Licença inválida"},
+                              "404": {"description": "Recurso não encontrado"}},
+            }
+            parameters = re.findall(r"\{([^}]+)\}", path)
+            if parameters:
+                operation["parameters"] = [{"name": name, "in": "path", "required": True,
+                                             "schema": {"type": "string"}}
+                                            for name in parameters]
+            if method in {"post", "put"}:
+                media_type = ("application/xml" if path.endswith("/versions") else
+                              "application/gzip" if path == "/api/v1/restore" else
+                              "application/json")
+                schema = ({"type": "string", "format": "binary"}
+                          if media_type != "application/json" else {"type": "object"})
+                operation["requestBody"] = {"required": True,
+                                            "content": {media_type: {"schema": schema}}}
+            paths[path][method] = operation
+    return {
+        "openapi": "3.0.3",
+        "info": {"title": f"{PRODUCT_NAME} API", "version": PRODUCT_VERSION,
+                 "description": "API REST para cadastro, gestão e consulta do OMNIEPG."},
+        "servers": [{"url": "/"}], "paths": paths,
+        "components": {"securitySchemes": {"basicAuth": {"type": "http", "scheme": "basic"}}},
+    }
+
+
+API_DOC_HTML = r'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>OMNIEPG API</title>
+<style>body{font:15px system-ui;margin:0;background:#f2f6fa;color:#14263a}main{max-width:1000px;margin:40px auto;background:#fff;padding:32px;border-radius:14px}code,pre{background:#071b33;color:#dff4ff;padding:3px 6px;border-radius:5px}pre{padding:16px;overflow:auto}a{color:#087ec1}li{margin:8px 0}</style></head><body><main>
+<h1>OMNIEPG API REST v1</h1><p>Integração autenticada para cadastro, gestão e consulta. O contrato completo está em
+<a href="/api/v1/openapi.json">OpenAPI 3.0 JSON</a>.</p>
+<h2>Autenticação</h2><p>Use HTTP Basic com um usuário ativo do painel. Operações de usuários, licença e configurações exigem administrador.</p>
+<pre>curl -u epgadmin:SENHA http://servidor:9100/api/v1/system</pre>
+<h2>Recursos</h2><ul><li><code>/api/v1/sources</code> — fontes XMLTV e sincronização</li>
+<li><code>/api/v1/carriers</code> — portadoras, canais, ações, logs e grade</li>
+<li><code>/api/v1/guides</code> e <code>/api/v1/errors</code> — programação e diagnóstico</li>
+<li><code>/api/v1/publications</code> — URLs XMLTV permanentes e versões</li>
+<li><code>/api/v1/users</code>, <code>/api/v1/license</code> e <code>/api/v1/settings</code> — administração</li></ul>
+<p>Consulte também <code>API_REST.md</code> no pacote do produto para exemplos e modelos completos.</p></main></body></html>'''
+
+
 APP: Application | None = None
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OMNIEPG/1.21"
+    server_version = "OMNIEPG/1.24"
     current_user: dict[str, Any] | None = None
 
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -2511,6 +2653,171 @@ class Handler(BaseHTTPRequestHandler):
     def _query(self) -> dict[str, list[str]]:
         return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
+    @staticmethod
+    def _public_source(source: dict[str, Any]) -> dict[str, Any]:
+        return {key: copy.deepcopy(value) for key, value in source.items()
+                if key != "parse_token"}
+
+    def _carrier_log(self, carrier_id: str) -> dict[str, Any]:
+        assert APP is not None
+        APP.carrier(carrier_id)
+        log_path = APP.supervisor.log_dir / f"{carrier_id}.log"
+        content = log_path.read_text(encoding="utf-8", errors="replace")[-30000:] if log_path.exists() else ""
+        return {"carrier_id": carrier_id, "log": content}
+
+    def _v1_get(self, path: str) -> bool:
+        assert APP is not None
+        if path == "/api/v1":
+            self._json({"product": PRODUCT_NAME, "version": PRODUCT_VERSION,
+                        "documentation": "/api/v1/docs", "openapi": "/api/v1/openapi.json"})
+            return True
+        if path == "/api/v1/docs":
+            payload = API_DOC_HTML.encode()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers(); self.wfile.write(payload)
+            return True
+        if path == "/api/v1/openapi.json":
+            self._json(openapi_document()); return True
+        if path == "/api/v1/license":
+            self._require_admin(); self._json(APP.license.check(APP.channel_count(), force=True)); return True
+        if path == "/api/v1/users":
+            self._require_admin(); self._json({"users": APP.users()}); return True
+        if path == "/api/v1/update":
+            self._require_admin(); self._json(update_information(APP.store.path.parent)); return True
+        if path == "/api/v1/backup":
+            self._require_admin(); payload = APP.configuration_backup()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Disposition", 'attachment; filename="omniepg-backup.tar.gz"')
+            self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
+            return True
+        self._require_license()
+        snapshot = APP.store.snapshot()
+        if path == "/api/v1/system":
+            state = APP.supervisor.state()
+            state.update({"epg_health": APP.epg_health(),
+                          "general_settings": snapshot["general_settings"],
+                          "license": APP.license.check(APP.channel_count())})
+            self._json(state); return True
+        if path == "/api/v1/settings":
+            self._require_admin(); self._json({"settings": snapshot["general_settings"]}); return True
+        if path == "/api/v1/sources":
+            self._json({"sources": [{**self._public_source(item), "sync_status": APP.guides.status(item)}
+                                    for item in snapshot["sources"]]}); return True
+        match = re.fullmatch(r"/api/v1/sources/([^/]+)(?:/(catalog))?", path)
+        if match:
+            source = APP.source(match.group(1))
+            if match.group(2):
+                self._json(APP.catalog(source["id"], self._query().get("force", ["0"])[0] == "1"))
+            else:
+                self._json({"source": {**self._public_source(source),
+                                       "sync_status": APP.guides.status(source)}})
+            return True
+        match = re.fullmatch(r"/api/v1/sources/([^/]+)/history", path)
+        if match:
+            APP.source(match.group(1)); self._json({"events": APP.guides.sync_history(match.group(1))}); return True
+        if path == "/api/v1/carriers":
+            runtime = {item["id"]: item for item in APP.supervisor.state()["carriers"]}
+            self._json({"carriers": [{**public_carrier(item), "runtime": runtime.get(item["id"], {})}
+                                     for item in snapshot["carriers"]]}); return True
+        if path == "/api/v1/channels":
+            channels = [{**public_channel(service), "carrier_id": carrier["id"],
+                         "carrier_name": carrier["name"]}
+                        for carrier in snapshot["carriers"] for service in carrier["services"]]
+            self._json({"channels": channels, "count": len(channels)}); return True
+        match = re.fullmatch(r"/api/v1/carriers/([^/]+)/channels/([^/]+)/logo", path)
+        if match:
+            payload = APP.logo_file(*match.groups()).read_bytes()
+            self.send_response(HTTPStatus.OK); self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
+            return True
+        match = re.fullmatch(r"/api/v1/carriers/([^/]+)(?:/(channels|guide|logs))?(?:/([^/]+))?", path)
+        if match:
+            carrier = APP.carrier(match.group(1)); resource, child_id = match.group(2), match.group(3)
+            if not resource:
+                self._json({"carrier": public_carrier(carrier)}); return True
+            if resource == "guide":
+                self._json(APP.guide(carrier["id"])); return True
+            if resource == "logs":
+                self._json(self._carrier_log(carrier["id"])); return True
+            if child_id:
+                channel = next((item for item in carrier["services"] if item["id"] == child_id), None)
+                if not channel: raise ApiError("Canal não encontrado", HTTPStatus.NOT_FOUND)
+                self._json({"carrier_id": carrier["id"], "channel": public_channel(channel)})
+            else:
+                self._json({"carrier_id": carrier["id"],
+                            "channels": [public_channel(item) for item in carrier["services"]]})
+            return True
+        if path == "/api/v1/guides":
+            query = self._query(); start = int(query.get("start", [str(now_epoch() - 21600)])[0]); end = int(query.get("end", [str(start + 86400)])[0])
+            self._json(APP.all_guides(start, end)); return True
+        if path == "/api/v1/errors":
+            self._json(APP.epg_health()); return True
+        if path == "/api/v1/publications":
+            self._json({"publications": APP.publications()}); return True
+        raise ApiError("Endpoint não encontrado", HTTPStatus.NOT_FOUND)
+
+    def _v1_write(self, method: str, path: str, request: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        assert APP is not None
+        created = HTTPStatus.CREATED
+        if path == "/api/v1/license" and method == "PUT":
+            self._require_admin(); return APP.install_license_key(request), HTTPStatus.OK
+        if path == "/api/v1/users" and method == "POST":
+            self._require_admin(); return APP.save_user(request), created
+        user_match = re.fullmatch(r"/api/v1/users/([^/]+)", path)
+        if user_match:
+            self._require_admin()
+            if method == "PUT": return APP.save_user({**request, "id": user_match.group(1)}), HTTPStatus.OK
+            if method == "DELETE": return APP.delete_user(user_match.group(1), str(self.current_user["id"])), HTTPStatus.OK
+        if path == "/api/v1/update/apply" and method == "POST":
+            self._require_admin(); return request_native_update(APP.store.path.parent, str(request.get("tag") or "")), HTTPStatus.OK
+        self._require_license()
+        if method == "POST" and path == "/api/v1/sources": return APP.save_source(request), created
+        match = re.fullmatch(r"/api/v1/sources/([^/]+)(?:/(sync))?", path)
+        if match:
+            source_id, action = match.groups()
+            if method == "POST" and action == "sync": return APP.catalog(source_id, force=True), HTTPStatus.OK
+            if method == "PUT" and not action: return APP.save_source({**request, "id": source_id}), HTTPStatus.OK
+            if method == "DELETE" and not action:
+                replacement = self._query().get("replacement_id", [""])[0]
+                return APP.delete_source(source_id, replacement), HTTPStatus.OK
+        if method == "POST" and path == "/api/v1/carriers": return APP.save_carrier(request), created
+        if method == "POST" and path == "/api/v1/carriers/actions/restart-all":
+            self._require_admin(); return APP.supervisor.restart_all(), HTTPStatus.OK
+        match = re.fullmatch(r"/api/v1/carriers/([^/]+)(?:/(channels|actions))?(?:/([^/]+))?", path)
+        if match:
+            carrier_id, resource, child = match.groups()
+            if method == "PUT" and not resource: return APP.save_carrier({**request, "id": carrier_id}), HTTPStatus.OK
+            if method == "DELETE" and not resource: return APP.delete_carrier(carrier_id), HTTPStatus.OK
+            if resource == "channels":
+                if method == "POST" and not child: return APP.save_channel(carrier_id, request), created
+                if method == "PUT" and child: return APP.save_channel(carrier_id, request, child), HTTPStatus.OK
+                if method == "DELETE" and child: return APP.delete_channel(carrier_id, child), HTTPStatus.OK
+            if method == "POST" and resource == "actions" and child:
+                if child == "audit": return APP.supervisor.audit(carrier_id, int(request.get("seconds", 8))), HTTPStatus.OK
+                if child not in {"start", "stop", "restart"}: raise ApiError("Ação inválida")
+                APP.supervisor.action(carrier_id, child); return {"result": "ok", "action": child}, HTTPStatus.OK
+        match = re.fullmatch(r"/api/v1/carriers/([^/]+)/channels/([^/]+)/logo", path)
+        if match:
+            carrier_id, channel_id = match.groups()
+            if method == "PUT": return APP.save_logo({"carrier_id": carrier_id, "service_id": channel_id,
+                                                       "data": request.get("data")}), HTTPStatus.OK
+            if method == "DELETE": return APP.delete_logo({"carrier_id": carrier_id,
+                                                            "service_id": channel_id}), HTTPStatus.OK
+        if method == "POST" and path == "/api/v1/publications": return APP.save_publication(request), created
+        match = re.fullmatch(r"/api/v1/publications/([^/]+)(?:/versions/([^/]+))?", path)
+        if match:
+            publication_id, version_id = match.groups()
+            if method == "PUT" and not version_id: return APP.save_publication({**request, "id": publication_id}), HTTPStatus.OK
+            if method == "DELETE" and version_id: return APP.delete_publication_version(publication_id, version_id), HTTPStatus.OK
+            if method == "DELETE" and not version_id: return APP.delete_publication(publication_id), HTTPStatus.OK
+        if path == "/api/v1/settings" and method == "PUT":
+            self._require_admin(); return APP.save_general_settings(request), HTTPStatus.OK
+        raise ApiError("Endpoint ou método não encontrado", HTTPStatus.NOT_FOUND)
+
     def do_GET(self) -> None:
         assert APP is not None
         path = urllib.parse.urlparse(self.path).path
@@ -2562,7 +2869,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not self._require_auth():
                 return
-            if path == "/":
+            if path.startswith("/api/v1"):
+                self._v1_get(path)
+            elif path == "/":
                 payload = INDEX_HTML.encode()
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2669,6 +2978,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Origem da requisição não permitida"}, HTTPStatus.FORBIDDEN)
             return
         try:
+            if path == "/api/v1/restore":
+                self._require_admin()
+                result = APP.restore_configuration(self._raw_body(MAX_BACKUP))
+                self._json(result)
+                restart = threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM))
+                restart.daemon = True; restart.start()
+                return
+            version_match = re.fullmatch(r"/api/v1/publications/([^/]+)/versions", path)
+            if version_match:
+                self._require_license()
+                filename = self._query().get("filename", ["guide.xml"])[0]
+                self._json(APP.upload_publication(version_match.group(1), filename,
+                                                  self._raw_body(MAX_XMLTV)), HTTPStatus.CREATED)
+                return
             if path == "/api/publications/upload":
                 self._require_license()
                 query = self._query()
@@ -2686,6 +3009,10 @@ class Handler(BaseHTTPRequestHandler):
                 restart.start()
                 return
             request = self._body()
+            if path.startswith("/api/v1"):
+                result, status = self._v1_write("POST", path, request)
+                self._json(result, status)
+                return
             if path == "/api/users":
                 self._require_admin()
                 result = APP.save_user(request)
@@ -2759,6 +3086,29 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(error)}, error.status)
         except Exception as error:
             self._json({"error": f"Falha interna: {error}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _mutation(self, method: str) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        if not self._require_auth():
+            return
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
+            self._json({"error": "Origem da requisição não permitida"}, HTTPStatus.FORBIDDEN)
+            return
+        try:
+            request = self._body() if method == "PUT" else {}
+            result, status = self._v1_write(method, path, request)
+            self._json(result, status)
+        except ApiError as error:
+            self._json({"error": str(error)}, error.status)
+        except Exception as error:
+            self._json({"error": f"Falha interna: {error}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def do_PUT(self) -> None:
+        self._mutation("PUT")
+
+    def do_DELETE(self) -> None:
+        self._mutation("DELETE")
 
 
 INDEX_HTML = r'''<!doctype html>

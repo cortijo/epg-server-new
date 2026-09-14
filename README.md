@@ -9,6 +9,10 @@ Para iniciar manutenção, diagnóstico ou desenvolvimento, leia primeiro
 e candidato, regras de trabalho, testes, deploy e rollback para continuidade
 por outro agente ou LLM.
 
+Integrações externas devem usar a API REST versionada descrita em
+[`API_REST.md`](API_REST.md). A instalação também publica documentação em
+`/api/v1/docs` e o contrato OpenAPI 3.0 em `/api/v1/openapi.json`.
+
 ## Componentes
 
 - `epg-product/app.py`: painel web, autenticação, usuários, fontes e portadoras;
