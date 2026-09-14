@@ -225,8 +225,10 @@ modifica as fontes cadastradas.
 A primeira página é um painel operacional com quantidade total de canais,
 canais em emissão, erros gerais e erros de EPG. Ela mostra o programa atual e
 o próximo evento de cada serviço, os alertas com a fonte XMLTV relacionada e a
-grade completa do dia para todos os canais. O estado é consultado a cada 15
-segundos e a grade diária a cada 60 segundos. A gestão tradicional permanece
+grade completa do dia para todos os canais. A grade aparece antes das tabelas
+de canais e alertas e pode ser filtrada por canal, portadora, programa, sinopse
+ou categoria. O estado é consultado a cada 15 segundos e a grade diária a cada
+60 segundos. A gestão tradicional permanece
 disponível em **Portadoras** na barra lateral.
 
 ### Configurações gerais de atualização

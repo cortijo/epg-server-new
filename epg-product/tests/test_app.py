@@ -32,6 +32,10 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('Grade EPG completa — hoje', INDEX_HTML)
         self.assertIn('/api/guides?start=${start}&end=${start+86400}', INDEX_HTML)
         self.assertIn('id="railCarriers"', INDEX_HTML)
+        self.assertIn('placeholder="Pesquisar canal ou programação"', INDEX_HTML)
+        self.assertIn('function filterMonitorGuide(value)', INDEX_HTML)
+        self.assertLess(INDEX_HTML.rfind('Grade EPG completa — hoje'),
+                        INDEX_HTML.rfind('Monitoramento dos canais'))
 
     def test_epg_fingerprint_ignores_xml_formatting_but_detects_schedule_changes(self):
         first = b'''<tv generated-at="one">
