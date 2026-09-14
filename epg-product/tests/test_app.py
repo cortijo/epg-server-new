@@ -23,6 +23,16 @@ from license_client import LicenseError, LicenseManager
 
 
 class EpgProductTests(unittest.TestCase):
+    def test_monitoring_is_the_initial_page_with_channels_errors_and_full_guide(self):
+        self.assertIn("let mainPage='monitor'", INDEX_HTML)
+        self.assertIn("firstRailOperation.id='railMonitor'", INDEX_HTML)
+        self.assertIn('CANAIS CADASTRADOS', INDEX_HTML)
+        self.assertIn('ERROS GERAIS', INDEX_HTML)
+        self.assertIn('ERROS DE EPG', INDEX_HTML)
+        self.assertIn('Grade EPG completa — hoje', INDEX_HTML)
+        self.assertIn('/api/guides?start=${start}&end=${start+86400}', INDEX_HTML)
+        self.assertIn('id="railCarriers"', INDEX_HTML)
+
     def test_epg_fingerprint_ignores_xml_formatting_but_detects_schedule_changes(self):
         first = b'''<tv generated-at="one">
           <channel id="sport"><display-name>Sport</display-name></channel>
