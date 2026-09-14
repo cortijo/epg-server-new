@@ -18,7 +18,7 @@ from app import (
     normalize_uploaded_xmltv, password_matches, password_record,
     parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
     validate_source, validate_config_backup, validate_general_settings,
-    openapi_document, public_carrier,
+    openapi_document, public_carrier, runtime_source_token,
 )
 from license_client import LicenseError, LicenseManager
 
@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.24.0")
+        self.assertEqual(document["info"]["version"], "1.24.1")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -242,12 +242,17 @@ class EpgProductTests(unittest.TestCase):
             self.assertEqual(restored["normalization"]["invalid_programmes"][0]["title"],
                              "Sem duração")
 
-    def test_parse_xml_runtime_url_is_internal_and_token_is_not_in_apis(self):
+    def test_all_emitter_sources_use_internal_uncompressed_cache(self):
         source = validate_source({"name": "Operadora", "url": "http://provider/guide.xml",
                                   "source_type": "parse_xml"})
         with mock.patch.dict("os.environ", {"EPG_HTTP_PORT": "9100"}):
             self.assertEqual(runtime_source_url(source),
-                             f"http://127.0.0.1:9100/parsed-xml/{source['parse_token']}.xml")
+                             f"http://127.0.0.1:9100/runtime-xmltv/{runtime_source_token(source['id'])}.xml")
+            gzip_source = validate_source({"name": "GZIP", "url": "http://provider/guide.xml.gz",
+                                           "source_type": "xmltv"})
+            self.assertTrue(runtime_source_url(gzip_source).startswith(
+                "http://127.0.0.1:9100/runtime-xmltv/"))
+            self.assertNotIn("guide.xml.gz", runtime_source_url(gzip_source))
         application_source = (Path(__file__).resolve().parents[1] / "app.py").read_text(
             encoding="utf-8")
         self.assertIn('if key != "parse_token"', application_source)

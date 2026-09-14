@@ -38,7 +38,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.24.0"
+PRODUCT_VERSION = "1.24.1"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -1152,14 +1152,14 @@ class GuideCache:
             return None
 
 
+def runtime_source_token(source_id: str) -> str:
+    return hashlib.sha256(f"omniepg-runtime:{source_id}".encode()).hexdigest()
+
+
 def runtime_source_url(source: dict[str, Any]) -> str:
-    if source.get("source_type", "xmltv") != "parse_xml":
-        return source["url"]
-    token = str(source.get("parse_token") or "")
-    if not re.fullmatch(r"[a-f0-9]{32}", token):
-        raise ApiError("A fonte Parse-XML não possui token interno válido")
+    token = runtime_source_token(str(source.get("id") or ""))
     port = int(os.environ.get("EPG_HTTP_PORT", "9100"))
-    return f"http://127.0.0.1:{port}/parsed-xml/{token}.xml"
+    return f"http://127.0.0.1:{port}/runtime-xmltv/{token}.xml"
 
 
 class Supervisor:
@@ -1918,6 +1918,24 @@ class Application:
             raise ApiError("A fonte Parse-XML ainda não possui conteúdo válido",
                            HTTPStatus.SERVICE_UNAVAILABLE)
         return payload, guide.get("normalization") or {}
+
+    def runtime_source_payload(self, token: str) -> tuple[bytes, dict[str, Any]]:
+        source = next((item for item in self.store.snapshot()["sources"]
+                       if hmac.compare_digest(runtime_source_token(item["id"]), token)), None)
+        if not source:
+            raise ApiError("Fonte interna não encontrada", HTTPStatus.NOT_FOUND)
+        guide = self.guides.get(source)
+        payload = guide.get("normalized_payload")
+        if not isinstance(payload, bytes):
+            path = self.guides._guide_path(source["id"])
+            payload = path.read_bytes() if path and path.is_file() else None
+        if not isinstance(payload, bytes) or not payload:
+            raise ApiError("Cache XMLTV interno indisponível", HTTPStatus.SERVICE_UNAVAILABLE)
+        return payload, {
+            "source_id": source["id"], "fetched_at": int(guide["fetched_at"]),
+            "channels": len(guide["channels"]),
+            "programmes": sum(map(len, guide["programmes"].values())),
+        }
 
     def delete_source(self, source_id: str, replacement_id: str = "") -> dict[str, Any]:
         affected_carriers: set[str] = set()
@@ -2863,6 +2881,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("X-XMLTV-Normalized", "parse-xml")
                 self.send_header("X-XMLTV-Channels", str(stats.get("channels", 0)))
                 self.send_header("X-XMLTV-Programmes", str(stats.get("programmes", 0)))
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            runtime_match = re.fullmatch(r"/runtime-xmltv/([a-f0-9]{64})\.xml", path)
+            if runtime_match:
+                if self.client_address[0] not in {"127.0.0.1", "::1"}:
+                    raise ApiError("Fonte interna disponível apenas localmente", HTTPStatus.FORBIDDEN)
+                payload, stats = APP.runtime_source_payload(runtime_match.group(1))
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, max-age=0, must-revalidate")
+                self.send_header("X-OMNIEPG-Source", str(stats["source_id"]))
+                self.send_header("X-OMNIEPG-Fetched-At", str(stats["fetched_at"]))
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
