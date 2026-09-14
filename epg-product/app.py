@@ -38,7 +38,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.24.1"
+PRODUCT_VERSION = "1.24.2"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -1924,17 +1924,24 @@ class Application:
                        if hmac.compare_digest(runtime_source_token(item["id"]), token)), None)
         if not source:
             raise ApiError("Fonte interna não encontrada", HTTPStatus.NOT_FOUND)
-        guide = self.guides.get(source)
-        payload = guide.get("normalized_payload")
-        if not isinstance(payload, bytes):
-            path = self.guides._guide_path(source["id"])
-            payload = path.read_bytes() if path and path.is_file() else None
+        path = self.guides._guide_path(source["id"])
+        # Emitters must never wait for an upstream refresh when a last-known-good
+        # guide exists. Source synchronization owns network access in background.
+        payload = path.read_bytes() if path and path.is_file() else None
+        guide = None
+        if not isinstance(payload, bytes) or not payload:
+            guide = self.guides.get(source)
+            payload = guide.get("normalized_payload")
+            if not isinstance(payload, bytes) and path and path.is_file():
+                payload = path.read_bytes()
         if not isinstance(payload, bytes) or not payload:
             raise ApiError("Cache XMLTV interno indisponível", HTTPStatus.SERVICE_UNAVAILABLE)
+        status = self.guides.status(source) or {}
         return payload, {
-            "source_id": source["id"], "fetched_at": int(guide["fetched_at"]),
-            "channels": len(guide["channels"]),
-            "programmes": sum(map(len, guide["programmes"].values())),
+            "source_id": source["id"],
+            "fetched_at": int(status.get("fetched_at") or (path.stat().st_mtime if path else 0)),
+            "channels": int(status.get("channel_count", 0)),
+            "programmes": int(status.get("programme_count", 0)),
         }
 
     def delete_source(self, source_id: str, replacement_id: str = "") -> dict[str, Any]:

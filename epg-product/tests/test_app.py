@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.24.1")
+        self.assertEqual(document["info"]["version"], "1.24.2")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -257,6 +257,21 @@ class EpgProductTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn('if key != "parse_token"', application_source)
         self.assertIn('if key not in {"url", "parse_token"}', application_source)
+
+    def test_runtime_source_serves_persisted_cache_without_upstream_wait(self):
+        source = {"id": "source-gzip", "name": "GZIP", "url": "http://provider/guide.xml.gz"}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = GuideCache(Path(directory))
+            path = cache._guide_path(source["id"])
+            path.write_bytes(b"<tv></tv>")
+            app = object.__new__(Application)
+            app.store = mock.Mock()
+            app.store.snapshot.return_value = {"sources": [source]}
+            app.guides = cache
+            with mock.patch.object(cache, "get", side_effect=AssertionError("upstream não deve ser consultado")):
+                payload, metadata = app.runtime_source_payload(runtime_source_token(source["id"]))
+            self.assertEqual(payload, b"<tv></tv>")
+            self.assertEqual(metadata["source_id"], source["id"])
 
     def test_parse_xml_source_type_is_available_in_ui(self):
         self.assertIn("Parse-XML (normalizar provedor)", INDEX_HTML)
