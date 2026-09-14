@@ -34,6 +34,9 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn('id="railCarriers"', INDEX_HTML)
         self.assertIn('placeholder="Pesquisar canal ou programação"', INDEX_HTML)
         self.assertIn('function filterMonitorGuide(value)', INDEX_HTML)
+        self.assertIn("toolbar.style.display=monitoring?'none':''", INDEX_HTML)
+        self.assertIn("summary.style.display=monitoring?'none':''", INDEX_HTML)
+        self.assertIn("showMainPage('monitor');", INDEX_HTML)
         self.assertLess(INDEX_HTML.rfind('Grade EPG completa — hoje'),
                         INDEX_HTML.rfind('Monitoramento dos canais'))
 
