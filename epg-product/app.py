@@ -39,7 +39,7 @@ from dexing import DexingClient, DexingError
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.25.1"
+PRODUCT_VERSION = "1.25.2"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -95,6 +95,14 @@ class ApiError(Exception):
 
 def now_epoch() -> int:
     return int(time.time())
+
+
+def bounded_text(value: Any, maximum: int) -> str:
+    """Normalize a required/optional short text without silently truncating it."""
+    text = str(value or "").strip()
+    if len(text) > maximum:
+        raise ApiError(f"O texto deve possuir no máximo {maximum} caracteres")
+    return text
 
 
 def version_tuple(value: str) -> tuple[int, int, int]:

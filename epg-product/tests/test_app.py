@@ -17,7 +17,7 @@ from app import (
     guide_content_fingerprint, parse_xmltv, parse_xmltv_datetime,
     normalize_uploaded_xmltv, password_matches, password_record,
     parse_update_release, runtime_source_url, select_publication_version, validate_carrier,
-    validate_source, validate_config_backup, validate_general_settings,
+    validate_source, validate_config_backup, validate_general_settings, validate_modulator,
     openapi_document, public_carrier, runtime_source_token,
 )
 from license_client import LicenseError, LicenseManager
@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.25.1")
+        self.assertEqual(document["info"]["version"], "1.25.2")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -37,6 +37,14 @@ class EpgProductTests(unittest.TestCase):
             self.assertIn(path, document["paths"])
         self.assertEqual(
             document["components"]["securitySchemes"]["basicAuth"]["scheme"], "basic")
+
+    def test_modulator_registration_validates_text_without_missing_helper(self):
+        value = validate_modulator({"name": "Dexing principal", "driver": "dexing_nds3306i",
+                                    "host": "10.42.0.152", "scheme": "https",
+                                    "username": "admin", "password": "admin"})
+        self.assertEqual(value["name"], "Dexing principal")
+        self.assertEqual(value["username"], "admin")
+        self.assertNotEqual(value["id"], "")
 
     def test_rest_api_public_carrier_hides_internal_logo_paths(self):
         carrier = {"id": "c1", "services": [{
