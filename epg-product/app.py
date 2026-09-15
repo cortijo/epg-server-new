@@ -38,7 +38,7 @@ from license_client import LicenseError, LicenseManager
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.24.2"
+PRODUCT_VERSION = "1.24.3"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -64,6 +64,8 @@ DEFAULT_GENERAL_SETTINGS = {
     "emitter_refresh_minutes": 180,
     "emitter_retry_minutes": 5,
     "detect_cache_updates": True,
+    "license_primary_url": "",
+    "license_secondary_url": "",
 }
 BRAZIL_TZ = timezone(timedelta(hours=-3))
 PASSWORD_ITERATIONS = 310_000
@@ -550,6 +552,15 @@ def validate_general_settings(value: dict[str, Any]) -> dict[str, Any]:
         result[key] = number
     result["detect_cache_updates"] = bool(
         value.get("detect_cache_updates", DEFAULT_GENERAL_SETTINGS["detect_cache_updates"]))
+    for key, label in (
+            ("license_primary_url", "Servidor principal de licenças"),
+            ("license_secondary_url", "Servidor redundante de licenças")):
+        url = str(value.get(key) or "").strip().rstrip("/")
+        if url:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ApiError(f"{label} deve usar uma URL HTTP ou HTTPS válida")
+        result[key] = url
     return result
 
 
@@ -1481,10 +1492,19 @@ class Application:
         self.logo_dir.mkdir(parents=True, exist_ok=True)
         self.publication_dir.mkdir(parents=True, exist_ok=True)
         self.store = Store(data_dir / "epg-product.json")
+        settings = self.store.snapshot()["general_settings"]
+        primary_license_url = settings.get("license_primary_url") or license_server_url
+        secondary_license_url = (settings.get("license_secondary_url") or
+                                 os.environ.get("EPG_LICENSE_SECONDARY_SERVER_URL", ""))
         self.license = LicenseManager(
-            license_server_url, license_key_file, license_installation_id,
-            license_check_seconds,
+            primary_license_url, license_key_file, license_installation_id,
+            license_check_seconds, secondary_server_url=secondary_license_url,
         )
+        if not settings.get("license_primary_url") and primary_license_url:
+            with self.store.lock:
+                self.store.data["general_settings"]["license_primary_url"] = primary_license_url
+                self.store.data["general_settings"]["license_secondary_url"] = secondary_license_url
+                self.store.save()
         self._bootstrap_user(bootstrap_user, bootstrap_password)
         self._migrate_logos()
         settings = self.store.snapshot()["general_settings"]
@@ -1549,13 +1569,16 @@ class Application:
                 "changed_sources": sorted(changed_sources), "refreshed": refreshed}
 
     def save_general_settings(self, request: dict[str, Any]) -> dict[str, Any]:
-        settings = validate_general_settings(request)
+        current = self.store.snapshot()["general_settings"]
+        settings = validate_general_settings({**current, **request})
         with self.store.lock:
             self.store.data["general_settings"] = settings
             self.store.save()
         self.guides.sync_seconds = settings["xmltv_sync_minutes"] * 60
         self.guides.sync_mode = settings["xmltv_sync_mode"]
         self.guides.daily_time = settings["xmltv_daily_time"]
+        self.license.set_servers(settings["license_primary_url"], settings["license_secondary_url"])
+        self.license.check(self.channel_count(), force=True)
         restarted = self.supervisor.restart_all()
         return {"result": "ok", "settings": settings, **restarted}
 
@@ -3235,6 +3258,10 @@ async function deleteCarrier(id){if(!confirm('Excluir esta portadora?'))return;t
 function openGeneralSettings(){const s=state.general_settings||{xmltv_sync_mode:'interval',xmltv_sync_minutes:60,xmltv_daily_time:'04:15',emitter_refresh_minutes:180,emitter_retry_minutes:5,detect_cache_updates:true};modal(`<div class="guide-head"><div><h2>Configurações gerais</h2><div class="muted">Sincronização das fontes e atualização dos emissores</div></div><button onclick="closeModal()">Fechar</button></div><div class="form-grid" style="margin-top:18px"><label>Modo de atualização das fontes<select id="gXmltvMode" onchange="generalSyncModeChanged()"><option value="interval" ${s.xmltv_sync_mode==='interval'?'selected':''}>Por intervalo</option><option value="daily" ${s.xmltv_sync_mode==='daily'?'selected':''}>Diariamente em horário definido</option></select></label><label id="gIntervalField">Intervalo XMLTV (minutos)<input id="gXmltvSync" type="number" min="5" max="10080" value="${s.xmltv_sync_minutes}"></label><label id="gDailyField">Horário diário — America/Sao_Paulo<input id="gXmltvDaily" type="time" value="${esc(s.xmltv_daily_time||'04:15')}"></label><label>Recarga pelo emissor (minutos)<input id="gEmitterRefresh" type="number" min="1" max="10080" value="${s.emitter_refresh_minutes}"></label><label>Nova tentativa após falha (minutos)<input id="gEmitterRetry" type="number" min="1" max="1440" value="${s.emitter_retry_minutes}"></label><label class="wide"><span>Detecção imediata do cache</span><select id="gDetectCache"><option value="1" ${s.detect_cache_updates?'selected':''}>Ativada — hot reload sem interromper o multicast</option><option value="0" ${!s.detect_cache_updates?'selected':''}>Desativada — respeitar o intervalo do emissor</option></select></label></div><p class="muted">No modo diário, a fonte é sincronizada uma vez por dia no horário escolhido. Se o servidor estava desligado nesse horário, a sincronização pendente acontece após iniciar. Mudanças reais na grade são carregadas a quente, mantendo o mesmo processo e o envio multicast. Ao salvar estas configurações, os emissores ativos reiniciam uma vez para receber os novos parâmetros.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveGeneralSettings()">Salvar e aplicar</button></div>`);generalSyncModeChanged()}
 function generalSyncModeChanged(){const daily=el('gXmltvMode')?.value==='daily';if(el('gIntervalField'))el('gIntervalField').style.display=daily?'none':'';if(el('gDailyField'))el('gDailyField').style.display=daily?'':'none'}
 async function saveGeneralSettings(){if(!confirm('Salvar a programação e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1'})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}}
+const openGeneralSettingsWithLicenseServers=openGeneralSettings;
+openGeneralSettings=function(){openGeneralSettingsWithLicenseServers();const grid=document.querySelector('.modal .form-grid'),s=state.general_settings||{};if(grid)grid.insertAdjacentHTML('beforeend',`<label class="wide">Servidor principal de licenças<input id="gLicensePrimary" type="url" value="${esc(s.license_primary_url||'')}" placeholder="http://servidor-principal:9200"></label><label class="wide">Servidor redundante de licenças<input id="gLicenseSecondary" type="url" value="${esc(s.license_secondary_url||'')}" placeholder="http://servidor-redundante:9200"></label>`)};
+const saveGeneralSettingsWithLicenseServers=saveGeneralSettings;
+saveGeneralSettings=async function(){if(!el('gLicensePrimary')?.value.trim()){toast('Informe o servidor principal de licenças',true);return}if(!confirm('Salvar a programação, os servidores de licença e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1',license_primary_url:el('gLicensePrimary').value.trim(),license_secondary_url:el('gLicenseSecondary').value.trim()})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}};
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
 async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encodeURIComponent(id)}`);modal(`<h2>Logs do emissor</h2><pre style="background:#071b33;color:#dff4ff;padding:16px;border-radius:10px;max-height:65vh;overflow:auto;white-space:pre-wrap">${esc(j.log||'Sem logs.')}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true)}}
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}

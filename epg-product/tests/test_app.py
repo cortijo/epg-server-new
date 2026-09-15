@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.24.2")
+        self.assertEqual(document["info"]["version"], "1.24.3")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -108,14 +108,29 @@ class EpgProductTests(unittest.TestCase):
         settings = validate_general_settings({
             "xmltv_sync_minutes": 30, "emitter_refresh_minutes": 45,
             "emitter_retry_minutes": 2, "detect_cache_updates": True,
+            "license_primary_url": "https://license-primary.example/",
+            "license_secondary_url": "http://license-secondary.example:9200/",
         })
         self.assertEqual(settings["xmltv_sync_minutes"], 30)
+        self.assertEqual(settings["license_primary_url"], "https://license-primary.example")
+        self.assertEqual(settings["license_secondary_url"], "http://license-secondary.example:9200")
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / "config.json")
             self.assertEqual(store.snapshot()["general_settings"]["emitter_refresh_minutes"], 180)
         self.assertIn("Configurações gerais", INDEX_HTML)
         self.assertIn("detect_cache_updates", INDEX_HTML)
         self.assertIn("Diariamente em horário definido", INDEX_HTML)
+        self.assertIn("Servidor principal de licenças", INDEX_HTML)
+        self.assertIn("Servidor redundante de licenças", INDEX_HTML)
+
+    def test_general_settings_reject_invalid_license_server_urls(self):
+        with self.assertRaisesRegex(ApiError, "principal"):
+            validate_general_settings({"license_primary_url": "license.local:9200"})
+        with self.assertRaisesRegex(ApiError, "redundante"):
+            validate_general_settings({
+                "license_primary_url": "http://license.local:9200",
+                "license_secondary_url": "ftp://backup.local",
+            })
 
     def test_daily_xmltv_sync_uses_sao_paulo_clock_and_rolls_to_next_day(self):
         zone = timezone(timedelta(hours=-3))
@@ -537,6 +552,35 @@ class EpgProductTests(unittest.TestCase):
                 status = manager.check(1)
             validate.assert_called_once()
             self.assertTrue(status["valid"])
+
+    def test_license_falls_back_to_secondary_only_when_primary_is_unavailable(self):
+        manager = LicenseManager(
+            "http://primary.test:9200", "license.key", "install-001",
+            secondary_server_url="http://secondary.test:9200")
+        valid = {"valid": True, "reason": "Licença válida",
+                 "license_server": "http://secondary.test:9200"}
+        unavailable = __import__("urllib.error", fromlist=["URLError"]).URLError("timeout")
+        with mock.patch.object(
+                manager, "_validate_key_at", side_effect=[unavailable, valid]) as validate:
+            status = manager._validate_key("EPG-" + "a" * 48, 2)
+        self.assertTrue(status["valid"])
+        self.assertEqual(status["license_server"], "http://secondary.test:9200")
+        self.assertEqual(
+            [call.args[0] for call in validate.call_args_list],
+            ["http://primary.test:9200", "http://secondary.test:9200"],
+        )
+
+    def test_license_does_not_mask_primary_rejection_with_secondary(self):
+        manager = LicenseManager(
+            "http://primary.test:9200", "license.key", "install-001",
+            secondary_server_url="http://secondary.test:9200")
+        rejected = {"valid": False, "reason": "Licença expirada",
+                    "license_server": "http://primary.test:9200"}
+        with mock.patch.object(manager, "_validate_key_at", return_value=rejected) as validate:
+            status = manager._validate_key("EPG-" + "a" * 48, 2)
+        self.assertFalse(status["valid"])
+        validate.assert_called_once_with(
+            "http://primary.test:9200", "EPG-" + "a" * 48, 2)
 
     def test_license_client_is_fail_closed_and_never_exposes_key(self):
         with tempfile.TemporaryDirectory() as directory:

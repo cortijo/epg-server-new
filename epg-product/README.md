@@ -240,7 +240,18 @@ Administradores podem abrir **Configurações gerais** na barra lateral e defini
   `America/Sao_Paulo` (padrão sugerido: 04:15);
 - intervalo de recarga do XMLTV por cada emissor multicast (padrão: 180);
 - intervalo para nova tentativa do emissor após falha (padrão: 5);
-- detecção de nova versão do cache.
+- detecção de nova versão do cache;
+- servidor principal de licenças;
+- servidor redundante de licenças, opcional.
+
+O servidor principal é sempre consultado primeiro. O redundante só é usado
+quando não há comunicação com o principal (falha de rede, timeout ou resposta
+inválida). Uma resposta válida do principal recusando, expirando ou limitando a
+licença é definitiva e não é mascarada pelo redundante. A interface não exibe
+a chave da licença. Em instalações novas, os valores iniciais também podem ser
+fornecidos por `EPG_LICENSE_SERVER_URL` e
+`EPG_LICENSE_SECONDARY_SERVER_URL`; depois de salvos, ficam persistidos nas
+configurações e incluídos no backup.
 
 Quando a detecção está ativada, a sincronização compara uma impressão digital
 semântica dos canais e programas da última cópia válida. Alterações apenas na

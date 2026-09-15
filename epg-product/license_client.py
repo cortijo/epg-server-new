@@ -24,8 +24,10 @@ KEY_PATTERN = re.compile(r"^EPG-[A-Za-z0-9_-]{40,80}$")
 
 class LicenseManager:
     def __init__(self, server_url: str, key_file: str, installation_id: str,
-                 check_seconds: int = 43200, timeout: int = 5):
+                 check_seconds: int = 43200, timeout: int = 5,
+                 secondary_server_url: str = ""):
         self.server_url = server_url.strip().rstrip("/")
+        self.secondary_server_url = secondary_server_url.strip().rstrip("/")
         self.key_file = Path(key_file) if key_file else None
         self.installation_id = installation_id.strip()
         self.check_seconds = max(10, min(604800, int(check_seconds)))
@@ -41,6 +43,10 @@ class LicenseManager:
         parsed = urllib.parse.urlparse(self.server_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             return "Servidor de licenças não configurado"
+        if self.secondary_server_url:
+            secondary = urllib.parse.urlparse(self.secondary_server_url)
+            if secondary.scheme not in {"http", "https"} or not secondary.netloc:
+                return "Servidor redundante de licenças inválido"
         if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", self.installation_id):
             return "Identificador da instalação não configurado"
         if not self.key_file:
@@ -56,13 +62,19 @@ class LicenseManager:
             raise LicenseError("Chave de licença inválida")
         return value
 
-    def _validate_key(self, key: str, channel_count: int) -> dict[str, Any]:
+    def set_servers(self, primary: str, secondary: str = "") -> None:
+        with self.lock:
+            self.server_url = primary.strip().rstrip("/")
+            self.secondary_server_url = secondary.strip().rstrip("/")
+            self.last_check_monotonic = 0.0
+
+    def _validate_key_at(self, server_url: str, key: str, channel_count: int) -> dict[str, Any]:
         payload = json.dumps({
             "key": key, "installation_id": self.installation_id,
             "channel_count": int(channel_count),
         }, separators=(",", ":")).encode()
         request = urllib.request.Request(
-            self.server_url + "/api/validate", data=payload, method="POST",
+            server_url + "/api/validate", data=payload, method="POST",
             headers={"Content-Type": "application/json", "User-Agent": "EPGStream-License/1"},
         )
         try:
@@ -81,7 +93,19 @@ class LicenseManager:
             "channel_count": int(channel_count),
             "expires_at": int(result.get("expires_at", 0)),
             "checked_at": int(result.get("checked_at", time.time())),
+            "license_server": server_url,
         }
+
+    def _validate_key(self, key: str, channel_count: int) -> dict[str, Any]:
+        errors = []
+        for server_url in (self.server_url, self.secondary_server_url):
+            if not server_url:
+                continue
+            try:
+                return self._validate_key_at(server_url, key, channel_count)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+                errors.append(f"{server_url}: {error}")
+        raise LicenseError("; ".join(errors) or "nenhum servidor disponível")
 
     def check(self, channel_count: int, force: bool = False) -> dict[str, Any]:
         with self.lock:
