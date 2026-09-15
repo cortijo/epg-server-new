@@ -5,6 +5,9 @@ multicast. Ele não recebe, transcodifica nem retransmite vídeo ou áudio. Cada
 instância administra fontes XMLTV e portadoras auxiliares que o modulador
 combina aos canais já existentes.
 
+A integração automática com o DeXin NDS3306I está documentada em
+[`DEXING_NDS3306I.md`](../DEXING_NDS3306I.md).
+
 ## Recursos
 
 - fontes XMLTV HTTP/HTTPS, inclusive `.gz`;
