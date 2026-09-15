@@ -87,6 +87,20 @@ class DexingTests(unittest.TestCase):
         self.assertEqual(DexingClient.transport_ids({"stream": {"TSID": "60", "ONID": 61}}),
                          {"transport_stream_id": 60, "original_network_id": 61})
 
+    def test_add_input_uses_output_context_and_firmware_interface_codes(self):
+        client = FakeDexing("10.42.0.152", "admin", "admin")
+        captured = {}
+        def post(path, fields, **_kwargs):
+            captured.update({"path": path, "fields": fields})
+            return {"op_code": 5}
+        client._post = post
+        client.add_input(3, "239.192.1.192", 5029, 1)
+        self.assertEqual(captured["path"], "/cgi.php?proctype=mux_edit_input_ch")
+        self.assertEqual(captured["fields"]["data_interface"], 2)
+        self.assertEqual(captured["fields"]["tsout_ch_index"], 3)
+        self.assertEqual(captured["fields"]["dropdown_select"], 3)
+        self.assertEqual(captured["fields"]["protocol"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

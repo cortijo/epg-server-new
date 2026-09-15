@@ -7,6 +7,7 @@ import ipaddress
 import json
 import re
 import ssl
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -118,20 +119,22 @@ class DexingClient:
                 return result
         return None
 
-    def add_input(self, address: str, port: int, data_interface: int) -> Any:
-        # Defaults mirror the modal fields documented for mux_edit_input_ch.
+    def add_input(self, output_index: int, address: str, port: int, data_interface: int) -> Any:
+        # NDS3306I encodes the four visible Data interfaces as values 2..5.
+        firmware_interface = data_interface + 1
         return self._post("/cgi.php?proctype=mux_edit_input_ch", {
-            "op_code": 5, "data_interface": data_interface,
+            "op_code": 5, "ip_index": 0, "data_interface": firmware_interface,
             "internal_interface": 0, "ch_step_en": 0, "step_channel": 1,
-            "start_channel": 1, "end_channel": 1, "ip_bitrate_mode": 0,
-            "ip_bitrate": 0, "ip_en": "on", "unicast": 0,
+            "start_channel": 1, "end_channel": 24, "ip_bitrate_mode": "on",
+            "ip_bitrate": "38.000", "ip_en": "on",
             "ipaddr": address, "step_en_ip": 0, "step_ip": 1,
             "ipaddr_end": address, "port": port, "step_en": 0,
-            "step": 1, "end_port": port, "IGMPSnooping": "On",
-            "record_type": 0, "sipaddr1": 0, "sipaddr2": 0,
-            "sipaddr3": 0, "sipaddr4": 0, "protocol": "UDP",
+            "step": 1, "end_port": port, "IGMPSnooping": 0,
+            "record_type": 1, "sipaddr1": "", "sipaddr2": "",
+            "sipaddr3": "", "sipaddr4": "", "protocol": 0,
             "backup_group": 0, "backup_status": 0, "backup_mode": 0,
-            "service_id": 0,
+            "service_id": 1, "tsin_ch_index": 0, "tsout_ch_index": output_index,
+            "tab_index": 1, "dropdown_select": output_index,
         })
 
     def parse_program(self, output_index: int, input_index: int, timeout: int = 60) -> Any:
@@ -218,12 +221,18 @@ class DexingClient:
         found = self.find_input(inventory, address, port)
         created = False
         if not found:
-            self.add_input(address, port, data_interface)
+            add_result = self.add_input(output_index, address, port, data_interface)
             created = True
-            inventory = self.inventory(output_index)
-            found = self.find_input(inventory, address, port)
+            for attempt in range(10):
+                inventory = self.inventory(output_index)
+                found = self.find_input(inventory, address, port)
+                if found:
+                    break
+                if attempt < 9:
+                    time.sleep(1)
         if not found:
-            raise DexingError("O input foi solicitado, mas não apareceu no inventário do Dexing")
+            detail = str(add_result)[:160] if 'add_result' in locals() else ""
+            raise DexingError(f"O input foi solicitado, mas não apareceu no inventário do Dexing. Resposta: {detail}")
         self.parse_program(output_index, found["input_index"])
         inventory = self.inventory(output_index)
         transport = self.transport_ids(self.general(output_index))

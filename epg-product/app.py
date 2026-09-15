@@ -40,7 +40,7 @@ from dexing import DexingClient, DexingError
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.27.1"
+PRODUCT_VERSION = "1.27.2"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
