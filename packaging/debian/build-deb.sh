@@ -27,7 +27,6 @@ g++ -std=c++17 -O2 -DNDEBUG -pthread -I/usr/include/jsoncpp -I"$ROOT/src" \
 
 install -m 0755 "$ROOT/epg-product/app.py" "$STAGE/usr/lib/epg-stream/app.py"
 install -m 0644 "$ROOT/epg-product/license_client.py" "$STAGE/usr/lib/epg-stream/license_client.py"
-install -m 0644 "$ROOT/epg-product/dexing.py" "$STAGE/usr/lib/epg-stream/dexing.py"
 install -m 0755 "$ROOT/scripts/verify_isdbtb_ts.py" "$STAGE/usr/lib/epg-stream/verify_isdbtb_ts.py"
 install -m 0755 "$SCRIPT_DIR/epg-stream-updater.py" "$STAGE/usr/lib/epg-stream/epg-stream-updater.py"
 install -m 0755 "$SCRIPT_DIR/epg-stream-configure" "$STAGE/usr/sbin/epg-stream-configure"

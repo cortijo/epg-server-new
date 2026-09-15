@@ -25,7 +25,6 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -36,11 +35,10 @@ from typing import Any
 
 from PIL import Image
 from license_client import LicenseError, LicenseManager
-from dexing import DexingClient, DexingError
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.27.3"
+PRODUCT_VERSION = "1.24.2"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -66,7 +64,6 @@ DEFAULT_GENERAL_SETTINGS = {
     "emitter_refresh_minutes": 180,
     "emitter_retry_minutes": 5,
     "detect_cache_updates": True,
-    "modulator_monitor_hours": 6,
 }
 BRAZIL_TZ = timezone(timedelta(hours=-3))
 PASSWORD_ITERATIONS = 310_000
@@ -83,10 +80,6 @@ CONTENT_CATEGORIES = (
     "Filmes", "Notícias", "Entretenimento", "Esportes", "Infantil",
     "Música", "Cultura", "Sociedade", "Educação", "Lazer",
 )
-MODULATOR_DRIVERS = {
-    "dexing_nds3306i": {"name": "DeXin NDS3306I", "automated": True},
-    "manual": {"name": "Outro / configuração manual", "automated": False},
-}
 
 
 class ApiError(Exception):
@@ -97,14 +90,6 @@ class ApiError(Exception):
 
 def now_epoch() -> int:
     return int(time.time())
-
-
-def bounded_text(value: Any, maximum: int) -> str:
-    """Normalize a required/optional short text without silently truncating it."""
-    text = str(value or "").strip()
-    if len(text) > maximum:
-        raise ApiError(f"O texto deve possuir no máximo {maximum} caracteres")
-    return text
 
 
 def version_tuple(value: str) -> tuple[int, int, int]:
@@ -554,7 +539,6 @@ def validate_general_settings(value: dict[str, Any]) -> dict[str, Any]:
         "xmltv_sync_minutes": (5, 10080),
         "emitter_refresh_minutes": (1, 10080),
         "emitter_retry_minutes": (1, 1440),
-        "modulator_monitor_hours": (1, 168),
     }
     for key, (minimum, maximum) in limits.items():
         try:
@@ -635,7 +619,6 @@ def validate_config_backup(payload: bytes) -> dict[str, Any]:
     restored["sources"] = sources
     restored["carriers"] = carriers
     restored["xmltv_publications"] = publications
-    restored["modulators"] = [validate_modulator(item) for item in data.get("modulators", [])]
     restored["schema_version"] = int(data.get("schema_version", 1))
     return restored
 
@@ -804,7 +787,6 @@ def validate_carrier(carrier: dict[str, Any]) -> dict[str, Any]:
         "clock_mode": clock_mode,
         "clock_utc_offset_minutes": clock_utc_offset_minutes,
         "clock_correction_minutes": clock_correction_minutes,
-        "dexing": {},
         "services": [],
     }
     if not result["name"]:
@@ -856,59 +838,7 @@ def validate_carrier(carrier: dict[str, Any]) -> dict[str, Any]:
     reserved = {0, 17, 18, 20, 8191}
     if any(pid in reserved for pid in range(result["pmt_pid"], result["pmt_pid"] + len(result["services"]))):
         raise ApiError("O intervalo de PIDs das PMTs contém um PID reservado")
-    dexing = carrier.get("dexing") or {}
-    if dexing and not isinstance(dexing, dict):
-        raise ApiError("Vínculo com o modulador inválido")
-    if dexing.get("modulator_id"):
-        result["dexing"] = {
-            "modulator_id": str(dexing["modulator_id"]),
-            "output_ts": integer(dexing.get("output_ts", 1), "Output TS", 1, 48),
-            "data_interface": integer(dexing.get("data_interface", 1), "Interface Data", 1, 4),
-            "auto_sync": bool(dexing.get("auto_sync", True)),
-            "last_sync_at": int(dexing.get("last_sync_at") or 0),
-            "last_sync_status": str(dexing.get("last_sync_status") or "")[:32],
-            "last_sync_error": str(dexing.get("last_sync_error") or "")[:500],
-            "input_channel": int(dexing.get("input_channel") or 0),
-            "last_monitor_at": int(dexing.get("last_monitor_at") or 0),
-            "monitor_status": str(dexing.get("monitor_status") or "pending")[:32],
-            "monitor_error": str(dexing.get("monitor_error") or "")[:500],
-        }
     return result
-
-
-def validate_modulator(value: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    name = bounded_text(value.get("name"), 100)
-    driver = str(value.get("driver") or (previous or {}).get("driver") or "dexing_nds3306i")
-    if driver not in MODULATOR_DRIVERS:
-        raise ApiError("Tipo de integração do modulador inválido")
-    host = str(value.get("host") or "").strip()
-    try:
-        ipaddress.ip_address(host)
-    except ValueError as error:
-        raise ApiError("Informe um IP válido para o modulador") from error
-    scheme = str(value.get("scheme") or "https").lower()
-    if scheme not in {"http", "https"}:
-        raise ApiError("Protocolo do modulador inválido")
-    username = bounded_text(value.get("username"), 64)
-    password = str(value.get("password") or (previous or {}).get("password") or "")
-    if not name:
-        raise ApiError("Informe o nome do modulador")
-    if MODULATOR_DRIVERS[driver]["automated"] and (not username or not password):
-        raise ApiError("Informe usuário e senha para a integração automática")
-    if len(password) > 256:
-        raise ApiError("Senha do modulador muito longa")
-    return {
-        "id": str(value.get("id") or slug_id("modulator")), "name": name, "driver": driver,
-        "host": host, "scheme": scheme, "username": username, "password": password,
-        "verify_tls": bool(value.get("verify_tls", False)),
-        "created_at": int((previous or {}).get("created_at") or now_epoch()),
-        "updated_at": now_epoch(),
-    }
-
-
-def public_modulator(value: dict[str, Any]) -> dict[str, Any]:
-    return {key: copy.deepcopy(value.get(key)) for key in
-            ("id", "name", "driver", "host", "scheme", "username", "verify_tls", "created_at", "updated_at")}
 
 
 class Store:
@@ -926,14 +856,12 @@ class Store:
             else:
                 loaded = {}
             self.data = {
-                "schema_version": 4,
+                "schema_version": 3,
                 "sources": loaded.get("sources") or [copy.deepcopy(DEFAULT_SOURCE)],
                 "carriers": loaded.get("carriers") or [],
                 "users": loaded.get("users") if isinstance(loaded.get("users"), list) else [],
                 "xmltv_publications": loaded.get("xmltv_publications")
                 if isinstance(loaded.get("xmltv_publications"), list) else [],
-                "modulators": loaded.get("modulators")
-                if isinstance(loaded.get("modulators"), list) else [],
                 "general_settings": validate_general_settings(
                     loaded.get("general_settings") or DEFAULT_GENERAL_SETTINGS),
             }
@@ -1576,40 +1504,7 @@ class Application:
             return
         while not self.source_sync_stopping.is_set():
             self.sync_due_sources_once()
-            self.monitor_due_modulators_once()
             self.source_sync_stopping.wait(60)
-
-    def monitor_due_modulators_once(self) -> dict[str, Any]:
-        snapshot = self.store.snapshot()
-        interval = int(snapshot.get("general_settings", {}).get("modulator_monitor_hours", 6)) * 3600
-        current = now_epoch()
-        checked, errors = 0, []
-        modulators = {item["id"]: item for item in snapshot.get("modulators", [])}
-        for carrier in snapshot["carriers"]:
-            binding = carrier.get("dexing") or {}
-            value = modulators.get(binding.get("modulator_id"))
-            if (not value or not MODULATOR_DRIVERS.get(value.get("driver", "dexing_nds3306i"), {}).get("automated") or
-                    current - int(binding.get("last_monitor_at") or 0) < interval):
-                continue
-            try:
-                client = self._dexing_client(value); client.login()
-                inventory = client.inventory(int(binding["output_ts"]) - 1)
-                found = client.find_input(inventory, carrier["destination"], int(carrier["port"]))
-                if not found:
-                    raise ApiError("Multicast não encontrado no inventário do modulador")
-                if not int(found.get("ts_lock") or 0) or float(found.get("bitrate_valid") or 0) <= 0:
-                    raise ApiError("Multicast cadastrado, porém sem lock ou sem bitrate")
-                status, message = "online", ""
-            except Exception as error:
-                status, message = "error", str(error); errors.append({"carrier_id": carrier["id"], "error": message})
-            with self.store.lock:
-                stored = next((item for item in self.store.data["carriers"] if item["id"] == carrier["id"]), None)
-                if stored and stored.get("dexing"):
-                    stored["dexing"].update({"last_monitor_at": current, "monitor_status": status,
-                                              "monitor_error": message})
-                    self.store.save()
-            checked += 1
-        return {"checked": checked, "errors": errors}
 
     def sync_due_sources_once(self) -> dict[str, Any]:
         snapshot = self.store.snapshot()
@@ -2246,8 +2141,6 @@ class Application:
     def save_carrier(self, request: dict[str, Any]) -> dict[str, Any]:
         carrier = validate_carrier(request)
         self.source(carrier["source_id"])
-        if carrier.get("dexing", {}).get("modulator_id"):
-            self._modulator(carrier["dexing"]["modulator_id"])
         for service in carrier["services"]:
             if service.get("source_id"):
                 self.source(service["source_id"])
@@ -2256,9 +2149,6 @@ class Application:
             stored = next((item for item in self.store.data["carriers"] if item["id"] == carrier["id"]), None)
             carrier["signalling_version"] = int(stored.get("signalling_version", 0)) if stored else 0
             if stored:
-                if carrier.get("dexing") and stored.get("dexing"):
-                    for key in ("last_sync_at", "last_sync_status", "last_sync_error", "input_channel"):
-                        carrier["dexing"][key] = stored["dexing"].get(key, carrier["dexing"].get(key))
                 stored_services = {item["id"]: item for item in stored["services"]}
                 for service in carrier["services"]:
                     previous = stored_services.get(service["id"], {})
@@ -2278,154 +2168,7 @@ class Application:
         self.supervisor.remove(carrier["id"])
         if carrier["auto_start"]:
             self.supervisor.action(carrier["id"], "start")
-        result = {"result": "ok", "id": carrier["id"]}
-        linked_modulator = (self._modulator(carrier["dexing"]["modulator_id"])
-                            if carrier.get("dexing", {}).get("modulator_id") else None)
-        if (carrier.get("dexing", {}).get("auto_sync") and linked_modulator and
-                MODULATOR_DRIVERS.get(linked_modulator.get("driver", "dexing_nds3306i"), {}).get("automated")):
-            try:
-                result["dexing_sync"] = self.sync_carrier_modulator(carrier["id"])
-            except ApiError as error:
-                result["dexing_sync"] = {"result": "error", "error": str(error)}
-        return result
-
-    def modulators(self) -> list[dict[str, Any]]:
-        return [public_modulator(item) for item in self.store.snapshot().get("modulators", [])]
-
-    def save_modulator(self, request: dict[str, Any]) -> dict[str, Any]:
-        self.require_license()
-        with self.store.lock:
-            items = self.store.data.setdefault("modulators", [])
-            previous = next((item for item in items if item["id"] == str(request.get("id") or "")), None)
-            value = validate_modulator(request, previous)
-            duplicate = next((item for item in items if item["id"] != value["id"] and
-                              item["host"] == value["host"] and item["scheme"] == value["scheme"]), None)
-            if duplicate:
-                raise ApiError(f"O equipamento já está cadastrado como {duplicate['name']}")
-            if previous:
-                items[items.index(previous)] = value
-            else:
-                items.append(value)
-            self.store.save()
-        return {"result": "ok", "modulator": public_modulator(value)}
-
-    def delete_modulator(self, modulator_id: str) -> dict[str, Any]:
-        with self.store.lock:
-            used = next((carrier for carrier in self.store.data["carriers"]
-                         if carrier.get("dexing", {}).get("modulator_id") == modulator_id), None)
-            if used:
-                raise ApiError(f"O modulador está vinculado à portadora {used['name']}")
-            before = len(self.store.data.get("modulators", []))
-            self.store.data["modulators"] = [item for item in self.store.data.get("modulators", [])
-                                               if item["id"] != modulator_id]
-            if len(self.store.data["modulators"]) == before:
-                raise ApiError("Modulador não encontrado", HTTPStatus.NOT_FOUND)
-            self.store.save()
-        return {"result": "ok"}
-
-    def _modulator(self, modulator_id: str) -> dict[str, Any]:
-        value = next((item for item in self.store.snapshot().get("modulators", [])
-                      if item["id"] == modulator_id), None)
-        if not value:
-            raise ApiError("Modulador não encontrado", HTTPStatus.NOT_FOUND)
-        return value
-
-    @staticmethod
-    def _dexing_client(value: dict[str, Any]) -> DexingClient:
-        if value.get("driver", "dexing_nds3306i") != "dexing_nds3306i":
-            raise ApiError("Este tipo de modulador utiliza configuração manual")
-        return DexingClient(value["host"], value["username"], value["password"],
-                            value["scheme"], value.get("verify_tls", False))
-
-    def test_modulator(self, modulator_id: str, output_ts: int = 1) -> dict[str, Any]:
-        value = self._modulator(modulator_id)
-        if not MODULATOR_DRIVERS[value.get("driver", "dexing_nds3306i")]["automated"]:
-            return {"result": "manual", "modulator": public_modulator(value),
-                    "message": "Equipamento mantido em configuração manual"}
-        try:
-            client = self._dexing_client(value)
-            client.login()
-            output_index = integer(output_ts, "Output TS", 1, 48) - 1
-            inventory = client.inventory(output_index)
-            transport = client.transport_ids(client.general(output_index))
-        except DexingError as error:
-            raise ApiError(str(error), HTTPStatus.BAD_GATEWAY) from error
-        programs = client.output_programs(inventory)
-        return {"result": "ok", "modulator": public_modulator(value),
-                "inputs": inventory.get("tsin", []), "programs": programs,
-                "program_count": len(programs), **transport}
-
-    def sync_carrier_modulator(self, carrier_id: str) -> dict[str, Any]:
-        was_active = any(item["id"] == carrier_id and item.get("active")
-                         for item in self.supervisor.state()["carriers"])
-        carrier = next((item for item in self.store.snapshot()["carriers"] if item["id"] == carrier_id), None)
-        if not carrier:
-            raise ApiError("Portadora não encontrada", HTTPStatus.NOT_FOUND)
-        binding = carrier.get("dexing") or {}
-        if not binding.get("modulator_id"):
-            raise ApiError("A portadora não está vinculada a um modulador")
-        value = self._modulator(binding["modulator_id"])
-        if not MODULATOR_DRIVERS[value.get("driver", "dexing_nds3306i")]["automated"]:
-            return {"result": "manual", "message": "Este modulador não possui integração automática"}
-        try:
-            result = self._dexing_client(value).synchronize(
-                int(binding["output_ts"]), carrier["destination"], int(carrier["port"]),
-                int(binding["data_interface"]), carrier["services"])
-            status, error_text = "ok", ""
-        except DexingError as error:
-            result = {"result": "error", "error": str(error)}
-            status, error_text = "error", str(error)
-        identifiers_changed = False
-        with self.store.lock:
-            stored = next((item for item in self.store.data["carriers"] if item["id"] == carrier_id), None)
-            if stored and stored.get("dexing"):
-                for result_key, carrier_key in (("transport_stream_id", "transport_stream_id"),
-                                                ("original_network_id", "original_network_id")):
-                    if result.get(result_key) and stored[carrier_key] != int(result[result_key]):
-                        stored[carrier_key] = int(result[result_key]); identifiers_changed = True
-                def normalized_name(text: Any) -> str:
-                    plain = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
-                    return re.sub(r"[^a-z0-9]", "", plain.lower())
-                programs_by_name: dict[str, list[dict[str, Any]]] = {}
-                for program in result.get("programs", []):
-                    programs_by_name.setdefault(normalized_name(program.get("service_name")), []).append(program)
-                matched = {service["id"]: programs_by_name.get(normalized_name(service["name"]), [])
-                           for service in stored["services"]}
-                used_sids = {service["service_id"] for service in stored["services"]
-                             if len(matched[service["id"]]) != 1}
-                imported = []
-                for service in stored["services"]:
-                    matches = matched[service["id"]]
-                    if len(matches) == 1:
-                        sid = int(matches[0].get("program_number", matches[0].get("prg_number")))
-                        if sid in used_sids:
-                            imported.append({"service_id": service["service_id"],
-                                             "configured_name": service["name"], "dexing_name": "",
-                                             "found": False, "reason": "SID do modulador colide com outro canal"})
-                            continue
-                        used_sids.add(sid)
-                        if service["service_id"] != sid:
-                            service["service_id"] = sid; identifiers_changed = True
-                        imported.append({"service_id": sid, "configured_name": service["name"],
-                                         "dexing_name": matches[0].get("service_name", ""), "found": True})
-                    else:
-                        imported.append({"service_id": service["service_id"],
-                                         "configured_name": service["name"], "dexing_name": "", "found": False,
-                                         "reason": "nome ausente ou ambíguo no Output TS"})
-                result["service_mapping"] = imported
-                stored["dexing"].update({"last_sync_at": now_epoch(), "last_sync_status": status,
-                                          "last_sync_error": error_text,
-                                          "input_channel": int(result.get("input_channel") or 0),
-                                          "last_monitor_at": now_epoch(),
-                                          "monitor_status": "online" if status == "ok" else "error",
-                                          "monitor_error": error_text})
-                self.store.save()
-        if status == "error":
-            raise ApiError(error_text, HTTPStatus.BAD_GATEWAY)
-        if identifiers_changed and was_active:
-            self.supervisor.remove(carrier_id)
-            self.supervisor.action(carrier_id, "start")
-        return {"result": "ok", **result}
+        return {"result": "ok", "id": carrier["id"]}
 
     def save_logo(self, request: dict[str, Any]) -> dict[str, Any]:
         carrier_id = str(request.get("carrier_id") or "")
@@ -3214,10 +2957,6 @@ class Handler(BaseHTTPRequestHandler):
                      "sync_status": APP.guides.status(source)}
                     for source in APP.store.snapshot()["sources"]
                 ]})
-            elif path == "/api/modulators":
-                self._require_admin()
-                self._require_license()
-                self._json({"modulators": APP.modulators()})
             elif path == "/api/sources/history":
                 self._require_license()
                 source_id = self._query().get("source_id", [""])[0]
@@ -3332,19 +3071,6 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/sources":
                 self._require_license()
                 result = APP.save_source(request)
-            elif path == "/api/modulators":
-                self._require_admin()
-                self._require_license()
-                result = APP.save_modulator(request)
-            elif path == "/api/modulators/test":
-                self._require_admin()
-                self._require_license()
-                result = APP.test_modulator(str(request.get("id") or ""),
-                                            int(request.get("output_ts") or 1))
-            elif path == "/api/modulators/delete":
-                self._require_admin()
-                self._require_license()
-                result = APP.delete_modulator(str(request.get("id") or ""))
             elif path == "/api/sources/test":
                 self._require_license()
                 source = validate_source(request)
@@ -3387,10 +3113,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_license()
                 result = APP.supervisor.audit(
                     str(request.get("id") or ""), int(request.get("seconds", 8)))
-            elif path == "/api/carriers/dexing-sync":
-                self._require_admin()
-                self._require_license()
-                result = APP.sync_carrier_modulator(str(request.get("id") or ""))
             elif path.startswith("/api/carriers/"):
                 self._require_license()
                 action = path.rsplit("/", 1)[-1]
@@ -3450,9 +3172,8 @@ document.head.insertAdjacentHTML('beforeend','<style>.modal-back{left:224px;padd
 document.head.insertAdjacentHTML('beforeend','<style>.top .brand{width:190px;height:46px;background:url("/assets/omniepg_logotipo_escuro.svg") center/contain no-repeat}.top .brand>*{display:none}.rail-brand{height:58px;background:url("/assets/omniepg_logotipo_transparente.svg") center/contain no-repeat}.rail-brand>*{display:none}.brand-image{width:190px;height:46px;object-fit:contain}@media(max-width:900px){.rail-brand{height:42px;background-image:url("/assets/omniepg_icone.svg");background-size:38px 38px;border-bottom:0}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.source-usage-summary{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:6px 9px;border:1px solid #bad7ea;border-radius:8px;background:#eef8fe;color:#275675;font-size:12px}.source-usage-summary b{font-size:15px;color:var(--blue)}</style>');
 document.getElementById('railUsers')?.insertAdjacentHTML('beforebegin','<button id="railSettings" class="rail-admin" onclick="openGeneralSettings()"><span class="rail-icon">⚙</span><span class="rail-label">Configurações gerais</span></button>');
-document.getElementById('railSettings')?.insertAdjacentHTML('beforebegin','<button id="railModulators" class="rail-admin" onclick="openModulators()"><span class="rail-icon">▤</span><span class="rail-label">Moduladores</span></button>');
-setInterval(()=>{for(const id of ['railSettings','railModulators']){const button=document.getElementById(id);if(button)button.style.display=session?.user?.role==='admin'?'flex':'none'}},500);
-let state={carriers:[],sources:[]},sources=[],modulators=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},overviewMode='carriers',timelineData=null,timelineStart=0,timelineWindow=8*3600,timelineDay=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+setInterval(()=>{const button=document.getElementById('railSettings');if(button)button.style.display=session?.user?.role==='admin'?'flex':'none'},500);
+let state={carriers:[],sources:[]},sources=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},overviewMode='carriers',timelineData=null,timelineStart=0,timelineWindow=8*3600,timelineDay=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.head.insertAdjacentHTML('beforeend','<style>.overview-switch{display:flex;gap:6px;padding:5px;background:#dfe9f2;border-radius:11px}.overview-switch button{min-width:130px}.overview-switch button.active{background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff}.channel-table{width:100%;min-width:1120px;border-collapse:collapse}.channel-table th,.channel-table td{padding:12px 14px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}.channel-table th{background:#edf4fa;color:#526477;font-size:11px;text-transform:uppercase}.channel-table tr:hover td{background:#f8fbfd}.channel-actions{display:flex;gap:6px;justify-content:flex-end}.channel-actions button{padding:8px 10px}.view-empty{padding:42px;text-align:center;color:var(--muted)}@media(max-width:760px){.overview-switch{width:100%}.overview-switch button{flex:1;min-width:0}}</style>');
 document.querySelector('.summary')?.insertAdjacentHTML('afterend','<div class="panel-filter"><div class="overview-switch"><button id="viewCarriers" class="active" onclick="setOverviewMode(\'carriers\')">Por modulador</button><button id="viewChannels" onclick="setOverviewMode(\'channels\')">Por canal</button></div><input id="carrierFilter" placeholder="Filtrar por modulador, canal, multicast, TSID ou ONID" oninput="filterCarriers()"><button class="filter-pill active" onclick="setCarrierFilter(this,\'all\')">Todos</button><button class="filter-pill" onclick="setCarrierFilter(this,\'running\')">Em transmissão</button><button class="filter-pill" onclick="setCarrierFilter(this,\'error\')">Com erro</button></div>');
 let carrierStatusFilter='all';
@@ -3475,9 +3196,6 @@ function renderChannelOverview(carriers){const errors=state.epg_health?.errors||
 function utcOffsetLabel(minutes){const sign=minutes<0?'-':'+';const absolute=Math.abs(minutes);return `UTC${sign}${String(Math.floor(absolute/60)).padStart(2,'0')}:${String(absolute%60).padStart(2,'0')}`}
 function clockLabel(c){return c.clock_mode==='custom'?`${utcOffsetLabel(c.clock_utc_offset_minutes??-180)} · correção ${c.clock_correction_minutes>0?'+':''}${c.clock_correction_minutes||0} min`:'Padrão UTC-03:00'}
 function carrierRows(c){const opened=expandedCarriers.has(c.id),guide=guideCache[c.id],disabled=state.license?.valid?'':' disabled',health=healthCarrier(c.id),label=health.status==='ok'?'EPG normal':health.status==='error'?'Todos os canais com erro':`${health.failing+health.warnings} canal(is) com problema`;return `<tr class="main-row health-${health.status}"><td><div class="carrier-name"><i class="health-dot ${health.status}"></i>${esc(c.name)}</div><div class="carrier-sub">TSID ${c.transport_stream_id} · ONID ${c.original_network_id} · ${esc(clockLabel(c))}</div></td><td><b>${esc(c.destination)}:${c.port}</b><div class="carrier-sub">${(c.bitrate/1000).toLocaleString('pt-BR')} kbit/s</div></td><td><b>${c.services.length}</b> serviço(s)<div class="health-message ${health.status}">${esc(label)}</div></td><td><span class="badge ${esc(c.status)}">${c.active?'Em transmissão':c.status==='error'?'Falha':'Parada'}</span>${c.last_error?`<div class="error-text carrier-sub">${esc(c.last_error)}</div>`:''}</td><td class="actions-col"><div class="action-stack"><button id="programButton-${esc(c.id)}" class="primary wide" aria-expanded="${opened}" onclick="togglePrograms('${esc(c.id)}')"${disabled}>${opened?'Ocultar programação':'Ver programação'}</button><button onclick="actionCarrier('${esc(c.id)}','${c.active?'restart':'start'}')"${disabled}>${c.active?'Reiniciar':'Iniciar'}</button>${c.active?`<button onclick="actionCarrier('${esc(c.id)}','stop')"${disabled}>Parar</button>`:'<span></span>'}<button onclick="openCarrier('${esc(c.id)}')"${disabled}>Editar</button><button onclick="cloneCarrier('${esc(c.id)}')"${disabled}>Clonar</button><button onclick="openLogs('${esc(c.id)}')"${disabled}>Logs</button><button class="danger" onclick="deleteCarrier('${esc(c.id)}')"${disabled}>Excluir</button></div></td></tr><tr id="programs-${esc(c.id)}" class="program-row ${opened?'open':''}"><td colspan="5"><div class="program-panel">${opened?(guide?programPanel(c,guide):'<div class="muted">Carregando programação…</div>'):''}</div></td></tr>`}
-function modulatorStateLabel(c){const d=c.dexing||{};if(!d.modulator_id)return '';const m=modulators.find(x=>x.id===d.modulator_id);if(m?.driver==='manual')return '<span class="badge">Modulador manual</span>';if(d.last_sync_status==='error')return `<span class="badge error">Integração com erro</span><div class="error-text carrier-sub">${esc(d.last_sync_error||d.monitor_error||'')}</div>`;if(d.last_sync_status==='ok')return `<span class="badge running">Modulador sincronizado</span><div class="carrier-sub">Multicast: ${d.monitor_status==='online'?'online':d.monitor_status==='error'?'falha':'aguardando verificação'}</div>`;return '<span class="badge">Modulador pendente</span>'}
-const renderWithModulatorStatus=render;
-render=function(){renderWithModulatorStatus();if(mainPage==='carriers'&&overviewMode==='carriers')document.querySelectorAll('.carrier-table tr.main-row').forEach((row,index)=>{const c=(state.carriers||[])[index],target=row?.children?.[3];if(target&&c)target.insertAdjacentHTML('beforeend',`<div style="margin-top:7px">${modulatorStateLabel(c)}</div>`)})};
 function programPanel(c,g){return `<div class="program-title"><div><b>Programação da portadora</b><div class="muted">${esc(g.timezone||'America/Sao_Paulo')} · ${c.services.length} serviço(s)</div></div></div><div class="program-list">${g.services.map(s=>{const health=healthService(c.id,s.id);return `<div class="program-line health-${health.status}"><div><b><i class="health-dot ${health.status}"></i>${esc(s.name)}</b><div class="muted">${esc(s.epg_channel_id)}</div><div class="health-message ${health.status}">${esc(health.message)}</div></div><div>SID ${s.service_id}</div><div class="program-detail"><small class="muted">HORÁRIO</small><div>${s.current?`${fmt(s.current.start)}–${fmt(s.current.stop)}`:'--:--'}</div></div><div class="program-detail"><small class="muted">NO AR AGORA</small><div class="program-now">${esc(s.current?.title||'Sem programa no ar')}</div>${s.current?`<div class="progress"><i style="width:${s.current.progress||0}%"></i></div>`:''}</div><div class="program-detail"><small class="muted">A SEGUIR</small><div>${esc(s.next?.title||'Sem próxima atração')}</div></div><button onclick="openGuide('${esc(c.id)}','${esc(s.id)}')">Ver grade</button></div>`}).join('')||'<div class="muted">Nenhum serviço cadastrado.</div>'}</div>`}
 function openEpgErrors(){const errors=state.epg_health?.errors||[];modal(`<div class="guide-head"><div><h2>Central de erros do EPG</h2><div class="muted">Diagnóstico do XMLTV e do processo de emissão multicast · atualizado ${new Date((state.epg_health?.generated_at||0)*1000).toLocaleString('pt-BR')}</div></div><button onclick="closeModal()">Fechar</button></div>${errors.length?`<div class="table-wrap" style="margin-top:15px"><table class="health-error-table"><thead><tr><th>Portadora</th><th>Canal</th><th>Fonte XMLTV</th><th>ID XMLTV</th><th>Diagnóstico</th></tr></thead><tbody>${errors.map(e=>`<tr><td>${esc(e.carrier_name)}</td><td><b><i class="health-dot ${e.status}"></i>${esc(e.service_name)}</b></td><td><b>${esc(e.source_name||e.source_id)}</b><div class="muted"><code>${esc(e.source_url||'URL não disponível')}</code></div></td><td><code>${esc(e.epg_channel_id)}</code></td><td><b>${esc(e.code)}</b><div class="health-message ${e.status}">${esc(e.message)}</div></td></tr>`).join('')}</tbody></table></div>`:'<div class="card empty"><h3>Todos os canais estão com programação normal</h3><p>Nenhum erro de XMLTV ou emissão foi detectado.</p></div>'}`,'publication-modal')}
 const TIMELINE_STEP=2*3600;
@@ -3505,8 +3223,8 @@ async function editChannel(carrierId,serviceId){const carrier=state.carriers.fin
 async function populateChannelCatalog(sourceId){const list=el('channelDirectCatalog');if(!list||!sourceId)return;list.innerHTML='<option value="Carregando…">';try{const channels=(await api(`/api/catalog?source_id=${encodeURIComponent(sourceId)}`)).channels||[];list.innerHTML=channels.map(item=>`<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}catch(_){list.innerHTML=''}}
 async function saveChannel(carrierId,serviceId){try{const carrier=state.carriers.find(item=>item.id===carrierId),sid=+el('channelSid').value;if(!carrier)throw new Error('Portadora não encontrada');const services=carrier.services.map(item=>item.id===serviceId?{...item,name:el('channelName').value.trim(),service_id:sid,source_id:el('channelSource').value,epg_channel_id:el('channelXmltv').value.trim(),default_category:el('channelCategory').value}:item);await api('/api/carriers',{method:'POST',body:JSON.stringify({...carrier,services})});closeModal();toast('Canal atualizado');await refresh();setOverviewMode('channels')}catch(e){toast(e.message,true)}}
 async function deleteChannel(carrierId,serviceId){const carrier=state.carriers.find(item=>item.id===carrierId),service=carrier?.services.find(item=>item.id===serviceId);if(!carrier||!service){toast('Canal não encontrado',true);return}if(carrier.services.length===1){toast('A portadora precisa manter ao menos um canal. Exclua a portadora ou adicione outro canal primeiro.',true);return}if(!confirm(`Excluir o canal ${service.name} da portadora ${carrier.name}?`))return;try{await api('/api/carriers',{method:'POST',body:JSON.stringify({...carrier,services:carrier.services.filter(item=>item.id!==serviceId)})});toast('Canal excluído');await refresh();setOverviewMode('channels')}catch(e){toast(e.message,true)}}
-function cloneCarrier(id){const original=state.carriers.find(x=>x.id===id);if(!original){toast('Portadora não encontrada',true);return}const copy={...original,id:'',name:`${original.name} - Cópia`,destination:'',auto_start:false,dexing:{},services:original.services.map(service=>({...service,id:''}))};openCarrier('',copy,true)}
-async function openCarrier(id='',template=null,cloning=false){const c=template||state.carriers.find(x=>x.id===id)||{auto_start:true,source_id:sources.find(s=>s.is_default)?.id||sources[0]?.id||'',transport_stream_id:1,original_network_id:1,port:5012,pmt_pid:4096,bitrate:1000000,ttl:32,clock_mode:'standard',clock_utc_offset_minutes:-180,clock_correction_minutes:0,services:[{service_id:1}]};modal(`<h2>${cloning?'Clonar':id?'Editar':'Nova'} portadora EPG</h2>${cloning?'<p class="muted">Informe um novo multicast. A cópia será salva com inicialização manual e não altera a portadora original.</p>':''}<div class="form-grid"><input id="cId" type="hidden" value="${esc(c.id||'')}"><label class="wide">Nome<input id="cName" value="${esc(c.name||'')}"></label><label>Fonte padrão da portadora<select id="cSource">${sources.map(s=>`<option value="${esc(s.id)}" ${s.id===c.source_id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>TSID<input id="cTsid" type="number" value="${c.transport_stream_id}"></label><label>ONID<input id="cOnid" type="number" value="${c.original_network_id}"></label><label>Multicast<input id="cDest" value="${esc(c.destination||'')}" placeholder="239.192.1.201" ${cloning?'autofocus':''}></label><label>Porta<input id="cPort" type="number" value="${c.port}"></label><label>IP da interface<input id="cIface" value="${esc(c.interface_address||'')}"></label><label>PID base PMT<input id="cPmt" type="number" value="${c.pmt_pid}"></label><label>Bitrate (bit/s)<input id="cBitrate" type="number" value="${c.bitrate}"></label><label>TTL<input id="cTtl" type="number" value="${c.ttl}"></label><label><span>Inicialização</span><select id="cAuto"><option value="1" ${c.auto_start?'selected':''}>Automática</option><option value="0" ${!c.auto_start?'selected':''}>Manual</option></select></label><label>Relógio PID 0x0014<select id="cClockMode" onchange="clockModeChanged()"><option value="standard" ${(c.clock_mode||'standard')==='standard'?'selected':''}>Padrão do sistema</option><option value="custom" ${c.clock_mode==='custom'?'selected':''}>Fuso e correção personalizados</option></select></label><label>Fuso transmitido<select id="cClockOffset">${utcOffsetOptions(c.clock_utc_offset_minutes??-180)}</select></label><label>Correção do horário (minutos)<input id="cClockCorrection" type="number" min="-1440" max="1440" step="1" value="${c.clock_correction_minutes||0}"></label><div id="clockHelp" class="muted wide"></div></div><p class="muted">Cada canal pode herdar esta fonte ou selecionar outro XMLTV. O ajuste do relógio também mantém a EIT coerente com TDT/TOT.</p><div class="toolbar" style="margin-top:20px"><h3>Serviços da portadora</h3><button onclick="addServiceRow()">+ Canal</button></div><div id="serviceRows">${c.services.map(serviceRow).join('')}</div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveCarrier()">Salvar</button></div>`);clockModeChanged();for(const select of document.querySelectorAll('.s-source'))ensureCatalogFor(select)}
+function cloneCarrier(id){const original=state.carriers.find(x=>x.id===id);if(!original){toast('Portadora não encontrada',true);return}const copy={...original,id:'',name:`${original.name} - Cópia`,destination:'',auto_start:false,services:original.services.map(service=>({...service,id:''}))};openCarrier('',copy,true)}
+async function openCarrier(id='',template=null,cloning=false){const c=template||state.carriers.find(x=>x.id===id)||{auto_start:true,source_id:sources.find(s=>s.is_default)?.id||sources[0]?.id||'',transport_stream_id:1,original_network_id:1,port:5012,pmt_pid:4096,bitrate:1000000,ttl:32,clock_mode:'standard',clock_utc_offset_minutes:-180,clock_correction_minutes:0,services:[{service_id:1}]};modal(`<h2>${cloning?'Clonar':id?'Editar':'Nova'} portadora EPG</h2>${cloning?'<p class="muted">Informe um novo multicast. A cópia será salva com inicialização manual e não altera a portadora original.</p>':''}<div class="form-grid"><input id="cId" type="hidden" value="${esc(c.id||'')}"><label class="wide">Nome<input id="cName" value="${esc(c.name||'')}"></label><label>Fonte padrão da portadora<select id="cSource">${sources.map(s=>`<option value="${esc(s.id)}" ${s.id===c.source_id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>TSID<input id="cTsid" type="number" value="${c.transport_stream_id}"></label><label>ONID<input id="cOnid" type="number" value="${c.original_network_id}"></label><label>Multicast<input id="cDest" value="${esc(c.destination||'')}" placeholder="239.192.1.201" ${cloning?'autofocus':''}></label><label>Porta<input id="cPort" type="number" value="${c.port}"></label><label>IP da interface<input id="cIface" value="${esc(c.interface_address||'')}"></label><label>PID base PMT<input id="cPmt" type="number" value="${c.pmt_pid}"></label><label>Bitrate (bit/s)<input id="cBitrate" type="number" value="${c.bitrate}"></label><label>TTL<input id="cTtl" type="number" value="${c.ttl}"></label><label><span>Inicialização</span><select id="cAuto"><option value="1" ${c.auto_start?'selected':''}>Automática</option><option value="0" ${!c.auto_start?'selected':''}>Manual</option></select></label><label>Relógio PID 0x0014<select id="cClockMode" onchange="clockModeChanged()"><option value="standard" ${(c.clock_mode||'standard')==='standard'?'selected':''}>Padrão do sistema</option><option value="custom" ${c.clock_mode==='custom'?'selected':''}>Fuso e correção personalizados</option></select></label><label>Fuso transmitido<select id="cClockOffset">${utcOffsetOptions(c.clock_utc_offset_minutes??-180)}</select></label><label>Correção do horário (minutos)<input id="cClockCorrection" type="number" min="-1440" max="1440" step="1" value="${c.clock_correction_minutes||0}"></label><div id="clockHelp" class="muted wide"></div></div><p class="muted">Cada canal pode herdar esta fonte ou selecionar outro XMLTV. O ajuste do relógio também mantém a EIT coerente com TDT/TOT.</p><div class="toolbar" style="margin-top:20px"><h3>Serviços da portadora</h3><button onclick="addServiceRow()">+ Canal</button></div><div id="serviceRows">${c.services.map(serviceRow).join('')}</div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveCarrier()">Salvar</button></div>`);clockModeChanged();for(const select of document.querySelectorAll('.s-source'))await ensureCatalogFor(select)}
 function addServiceRow(){el('serviceRows').insertAdjacentHTML('beforeend',serviceRow());ensureCatalogFor(el('serviceRows').lastElementChild.querySelector('.s-source'))}
 async function saveCarrier(){try{const original=state.carriers.find(c=>c.id===el('cId').value),services=[...document.querySelectorAll('.service-edit')].map(r=>{const id=r.querySelector('.s-id').value,previous=original?.services.find(s=>s.id===id);return{id,name:r.querySelector('.s-name').value,source_id:r.querySelector('.s-source').value,epg_channel_id:r.querySelector('.s-channel').value,service_id:+r.querySelector('.s-sid').value,default_category:r.querySelector('.s-category').value,logo:previous?.logo||{}}});await api('/api/carriers',{method:'POST',body:JSON.stringify({id:el('cId').value,name:el('cName').value,source_id:el('cSource').value,auto_start:el('cAuto').value==='1',transport_stream_id:+el('cTsid').value,original_network_id:+el('cOnid').value,destination:el('cDest').value,port:+el('cPort').value,interface_address:el('cIface').value,pmt_pid:+el('cPmt').value,bitrate:+el('cBitrate').value,ttl:+el('cTtl').value,clock_mode:el('cClockMode').value,clock_utc_offset_minutes:+el('cClockOffset').value,clock_correction_minutes:+el('cClockCorrection').value,services})});closeModal();toast('Portadora salva');refresh()}catch(e){toast(e.message,true)}}
 async function uploadLogo(input){const file=input.files?.[0],carrierId=el('cId').value,serviceId=input.closest('.service-edit').querySelector('.s-id').value;if(!file)return;if(file.type!=='image/png'){toast('Selecione um arquivo PNG',true);return}if(file.size>2*1024*1024){toast('O logo deve possuir no máximo 2 MiB',true);return}try{const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file)});await api('/api/carriers/logo',{method:'POST',body:JSON.stringify({carrier_id:carrierId,service_id:serviceId,data})});closeModal();toast('Logo ISDB-TB salvo em seis formatos');await refresh();openCarrier(carrierId)}catch(e){toast(e.message,true)}}
@@ -3514,53 +3232,9 @@ async function deleteLogo(button){if(!confirm('Remover o logo deste canal?'))ret
 async function actionCarrier(id,action){try{await api(`/api/carriers/${action}`,{method:'POST',body:JSON.stringify({id})});toast('Ação executada');setTimeout(refresh,400)}catch(e){toast(e.message,true)}}
 async function restartAllCarriers(){if(!confirm('Reiniciar agora todos os fluxos que deveriam estar ativos?'))return;try{const result=await api('/api/carriers/restart-all',{method:'POST',body:'{}'});toast(result.errors?.length?`${result.restarted} fluxo(s) reiniciado(s); ${result.errors.length} falha(s)`:`${result.restarted} fluxo(s) reiniciado(s)`);setTimeout(refresh,500)}catch(e){toast(e.message,true)}}
 async function deleteCarrier(id){if(!confirm('Excluir esta portadora?'))return;try{await api('/api/carriers/delete',{method:'POST',body:JSON.stringify({id})});toast('Portadora excluída');refresh()}catch(e){toast(e.message,true)}}
-async function loadModulators(){modulators=(await api('/api/modulators')).modulators;return modulators}
-const refreshWithoutModulatorPreload=refresh;
-refresh=async function(){await refreshWithoutModulatorPreload();if(session.user?.role==='admin'&&state.license?.valid&&!modulators.length){try{await loadModulators();render();filterCarriers()}catch(_){}}};
-async function openModulators(){try{await loadModulators();modal(`<div class="guide-head"><div><h2>Moduladores Dexing NDS3306I</h2><div class="muted">Credenciais e integração automática por portadora.</div></div><button onclick="closeModal()">Fechar</button></div><div class="toolbar" style="margin-top:18px"><span>${modulators.length} equipamento(s)</span><button class="primary" onclick="editModulator()">+ Modulador</button></div><div class="source-channel-table"><table><thead><tr><th>Nome</th><th>Endereço</th><th>Usuário</th><th>Ações</th></tr></thead><tbody>${modulators.map(m=>`<tr><td><b>${esc(m.name)}</b></td><td>${esc(m.scheme)}://${esc(m.host)}</td><td>${esc(m.username)}</td><td><button onclick="testModulator('${esc(m.id)}')">Testar</button> <button onclick="editModulator('${esc(m.id)}')">Editar</button> <button class="danger" onclick="deleteModulator('${esc(m.id)}')">Excluir</button></td></tr>`).join('')||'<tr><td colspan="4">Nenhum modulador cadastrado.</td></tr>'}</tbody></table></div>`)}catch(e){toast(e.message,true)}}
-function editModulator(id=''){const m=modulators.find(x=>x.id===id)||{scheme:'https',verify_tls:false};modal(`<h2>${id?'Editar':'Novo'} modulador Dexing</h2><div class="form-grid"><input id="modId" type="hidden" value="${esc(m.id||'')}"><label>Nome<input id="modName" value="${esc(m.name||'')}"></label><label>IP<input id="modHost" value="${esc(m.host||'')}" placeholder="10.42.0.152"></label><label>Protocolo<select id="modScheme"><option value="https" ${m.scheme==='https'?'selected':''}>HTTPS</option><option value="http" ${m.scheme==='http'?'selected':''}>HTTP</option></select></label><label>Usuário<input id="modUser" value="${esc(m.username||'')}"></label><label>Senha<input id="modPassword" type="password" placeholder="${id?'Deixe vazio para manter':'Senha'}"></label><label><span>Certificado TLS</span><select id="modTls"><option value="0" ${!m.verify_tls?'selected':''}>Aceitar certificado interno</option><option value="1" ${m.verify_tls?'selected':''}>Validar certificado</option></select></label></div><p class="muted">A senha nunca é devolvida pela API ou exibida no painel. O arquivo de configuração é protegido com permissão 0600.</p><div class="modal-actions"><button onclick="openModulators()">Cancelar</button><button class="primary" onclick="saveModulator()">Salvar</button></div>`)}
-async function saveModulator(){try{await api('/api/modulators',{method:'POST',body:JSON.stringify({id:el('modId').value,name:el('modName').value,host:el('modHost').value,scheme:el('modScheme').value,username:el('modUser').value,password:el('modPassword').value,verify_tls:el('modTls').value==='1'})});toast('Modulador salvo');openModulators()}catch(e){toast(e.message,true)}}
-async function testModulator(id){try{toast('Autenticando e lendo o Output TS 1…');const r=await api('/api/modulators/test',{method:'POST',body:JSON.stringify({id,output_ts:1})});toast(`Conexão válida · ${r.inputs.length} inputs · ${r.program_count} programas`)}catch(e){toast(e.message,true)}}
-async function deleteModulator(id){if(!confirm('Excluir este modulador?'))return;try{await api('/api/modulators/delete',{method:'POST',body:JSON.stringify({id})});openModulators()}catch(e){toast(e.message,true)}}
-const openModulatorsByDriver=openModulators;
-openModulators=async function(){await openModulatorsByDriver();const title=document.querySelector('.modal h2'),description=document.querySelector('.modal .guide-head .muted');if(title)title.textContent='Moduladores';if(description)description.textContent='Integração por adaptadores; equipamentos sem API permanecem em configuração manual.'};
-const editModulatorByDriver=editModulator;
-editModulator=function(id=''){editModulatorByDriver(id);const m=modulators.find(x=>x.id===id)||{driver:'dexing_nds3306i'},grid=document.querySelector('.modal .form-grid');if(grid)grid.insertAdjacentHTML('afterbegin',`<label>Tipo de integração<select id="modDriver"><option value="dexing_nds3306i" ${m.driver!=='manual'?'selected':''}>DeXin NDS3306I — automática</option><option value="manual" ${m.driver==='manual'?'selected':''}>Outro — configuração manual</option></select></label>`);const title=document.querySelector('.modal h2');if(title)title.textContent=id?'Editar modulador':'Novo modulador'};
-saveModulator=async function(){try{await api('/api/modulators',{method:'POST',body:JSON.stringify({id:el('modId').value,name:el('modName').value,driver:el('modDriver')?.value||'dexing_nds3306i',host:el('modHost').value,scheme:el('modScheme').value,username:el('modUser').value,password:el('modPassword').value,verify_tls:el('modTls').value==='1'})});toast('Modulador salvo');openModulators()}catch(e){toast(e.message,true)}};
-async function syncDexingCarrier(id){try{toast('Sincronizando o Dexing…');const r=await api('/api/carriers/dexing-sync',{method:'POST',body:JSON.stringify({id})});const missing=(r.service_mapping||[]).filter(x=>!x.found).length;toast(`Dexing sincronizado · input IP${r.input_channel} · ${r.pids_added.length} PID(s) incluído(s)${missing?` · ${missing} SID(s) não localizado(s)`:''}`);refresh()}catch(e){toast(e.message,true)}}
-
-const openCarrierWithoutDexing=openCarrier;
-openCarrier=async function(id='',template=null,cloning=false){if(session.user?.role==='admin'&&!modulators.length){try{await loadModulators()}catch(_){}}await openCarrierWithoutDexing(id,template,cloning);const c=template||state.carriers.find(x=>x.id===id)||{},d=c.dexing||{};const serviceBlock=el('serviceRows');if(!serviceBlock)return;serviceBlock.insertAdjacentHTML('beforebegin',`<div id="dexingBindingCard" class="card wide" style="margin:16px 0;padding:14px"><h3>Integração Dexing NDS3306I</h3><div class="form-grid"><label>Modulador<select id="cDexingMod"><option value="">Não sincronizar</option>${modulators.map(m=>`<option value="${esc(m.id)}" ${m.id===d.modulator_id?'selected':''}>${esc(m.name)} · ${esc(m.host)}</option>`).join('')}</select></label><label>Output TS (1–48)<input id="cDexingTs" type="number" min="1" max="48" value="${d.output_ts||1}"></label><label>Interface de entrada<select id="cDexingData">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(d.data_interface||1)?'selected':''}>Data${n}</option>`).join('')}</select></label><label><span>Ao salvar</span><select id="cDexingAuto"><option value="1" ${d.auto_sync!==false?'selected':''}>Sincronizar automaticamente</option><option value="0" ${d.auto_sync===false?'selected':''}>Somente manual</option></select></label></div>${d.last_sync_at?`<p class="muted">Última sincronização: ${new Date(d.last_sync_at*1000).toLocaleString('pt-BR')} · ${esc(d.last_sync_status)} ${d.input_channel?`· IP${d.input_channel}`:''}</p>`:''}${id&&d.modulator_id?`<button onclick="syncDexingCarrier('${esc(id)}')">Sincronizar agora</button>`:''}</div>`)};
-const openCarrierGenericModulator=openCarrier;
-openCarrier=async function(id='',template=null,cloning=false){await openCarrierGenericModulator(id,template,cloning);const card=el('dexingBindingCard'),select=el('cDexingMod');if(card?.querySelector('h3'))card.querySelector('h3').textContent='Integração com modulador';if(select?.options[0])select.options[0].textContent='Sem integração automática'};
-let carrierModulatorSnapshot=null;
-function automaticModulatorOptions(selected=''){return modulators.filter(m=>m.driver!=='manual').map(m=>`<option value="${esc(m.id)}" ${m.id===selected?'selected':''}>${esc(m.name)} · ${esc(m.host)}</option>`).join('')}
-function manualSidFields(){document.querySelectorAll('.service-edit').forEach(row=>{const field=row.querySelector('.s-sid');if(field?.tagName==='SELECT'){const input=document.createElement('input');input.className='s-sid';input.type='number';input.min='1';input.max='65535';input.value=field.value||'1';field.replaceWith(input)}})}
-function chooseModulatorProgram(select){const option=select.selectedOptions[0],row=select.closest('.service-edit'),name=row?.querySelector('.s-name');if(name&&option?.dataset.name&&!name.value.trim())name.value=option.dataset.name}
-function modulatorSidFields(programs){const sorted=[...(programs||[])].filter(p=>Number(p.program_number??p.prg_number)>0).sort((a,b)=>Number(a.program_number??a.prg_number)-Number(b.program_number??b.prg_number));document.querySelectorAll('.service-edit').forEach(row=>{const field=row.querySelector('.s-sid'),current=Number(field?.value||1),options=sorted.map(p=>{const sid=Number(p.program_number??p.prg_number),name=p.service_name||`Canal ${sid}`;return `<option value="${sid}" data-name="${esc(name)}" ${sid===current?'selected':''}>${sid} — ${esc(name)}</option>`}).join('');const select=document.createElement('select');select.className='s-sid';select.onchange=()=>chooseModulatorProgram(select);select.innerHTML=(sorted.some(p=>Number(p.program_number??p.prg_number)===current)?'':`<option value="${current}" selected>${current} — SID atual (não localizado)</option>`)+options;field?.replaceWith(select)})}
-async function inspectCarrierModulator(){const modulatorId=el('cDexingMod')?.value,status=el('carrierModulatorStatus');if(!modulatorId){carrierModulatorSnapshot=null;el('cTsid').readOnly=false;el('cOnid').readOnly=false;manualSidFields();if(status)status.innerHTML='<span class="muted">Preenchimento manual de TSID, ONID e SID.</span>';return}if(status)status.innerHTML='<span class="muted">Consultando o Output TS no modulador…</span>';try{const result=await api('/api/modulators/test',{method:'POST',body:JSON.stringify({id:modulatorId,output_ts:+el('cDexingTs').value})});if(result.result!=='ok')throw new Error('O equipamento selecionado não oferece sincronização automática');if(!result.transport_stream_id||!result.original_network_id)throw new Error('O modulador não informou TSID/ONID para este Output TS');carrierModulatorSnapshot=result;el('cTsid').value=result.transport_stream_id;el('cOnid').value=result.original_network_id;el('cTsid').readOnly=true;el('cOnid').readOnly=true;modulatorSidFields(result.programs);status.innerHTML=`<span class="badge running">Sincronizado com o modulador</span><span class="muted"> TSID ${result.transport_stream_id} · ONID ${result.original_network_id} · ${result.program_count} Program Number(s) disponível(is)</span>`}catch(e){carrierModulatorSnapshot=null;el('cTsid').readOnly=true;el('cOnid').readOnly=true;manualSidFields();if(status)status.innerHTML=`<span class="badge error">Falha ao consultar o modulador</span><div class="error-text">${esc(e.message)}</div>`}}
-const openCarrierIntegrationFirst=openCarrier;
-openCarrier=async function(id='',template=null,cloning=false){await openCarrierIntegrationFirst(id,template,cloning);const c=template||state.carriers.find(x=>x.id===id)||{},d=c.dexing||{},card=el('dexingBindingCard');if(!card)return;const heading=card.parentElement.querySelector('h2');if(heading)heading.insertAdjacentElement('afterend',card);card.innerHTML=`<h3>1. Integração com modulador</h3><p class="muted">Selecione primeiro como esta portadora será configurada.</p><div class="form-grid"><label class="wide">Integração<select id="cDexingMod" onchange="inspectCarrierModulator()"><option value="">Sem integração automática — preenchimento manual</option>${automaticModulatorOptions(d.modulator_id||'')}</select></label><label>Output TS (1–48)<input id="cDexingTs" type="number" min="1" max="48" value="${d.output_ts||1}" onchange="inspectCarrierModulator()"></label><label>Interface de entrada<select id="cDexingData">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(d.data_interface||1)?'selected':''}>Data${n}</option>`).join('')}</select></label><label><span>Ao salvar</span><select id="cDexingAuto"><option value="1" ${d.auto_sync!==false?'selected':''}>Sincronizar automaticamente</option><option value="0" ${d.auto_sync===false?'selected':''}>Somente manual</option></select></label></div><div id="carrierModulatorStatus" style="margin-top:10px"></div>${id&&d.modulator_id?`<button style="margin-top:10px" onclick="syncDexingCarrier('${esc(id)}')">Sincronizar agora</button>`:''}`;carrierModulatorSnapshot=null;inspectCarrierModulator()};
-const addServiceRowWithModulator=addServiceRow;
-addServiceRow=function(){addServiceRowWithModulator();if(carrierModulatorSnapshot)modulatorSidFields(carrierModulatorSnapshot.programs)};
-saveCarrier=async function(){
- try{
-  const original=state.carriers.find(c=>c.id===el('cId').value);
-  const services=[...document.querySelectorAll('.service-edit')].map(r=>{const id=r.querySelector('.s-id').value,previous=original?.services.find(s=>s.id===id);return{id,name:r.querySelector('.s-name').value,source_id:r.querySelector('.s-source').value,epg_channel_id:r.querySelector('.s-channel').value,service_id:+r.querySelector('.s-sid').value,default_category:r.querySelector('.s-category').value,logo:previous?.logo||{}}});
-  const modulatorId=el('cDexingMod')?.value||'';
-  const payload={id:el('cId').value,name:el('cName').value,source_id:el('cSource').value,auto_start:el('cAuto').value==='1',transport_stream_id:+el('cTsid').value,original_network_id:+el('cOnid').value,destination:el('cDest').value,port:+el('cPort').value,interface_address:el('cIface').value,pmt_pid:+el('cPmt').value,bitrate:+el('cBitrate').value,ttl:+el('cTtl').value,clock_mode:el('cClockMode').value,clock_utc_offset_minutes:+el('cClockOffset').value,clock_correction_minutes:+el('cClockCorrection').value,services,dexing:modulatorId?{modulator_id:modulatorId,output_ts:+el('cDexingTs').value,data_interface:+el('cDexingData').value,auto_sync:el('cDexingAuto').value==='1'}:{}};
-  const result=await api('/api/carriers',{method:'POST',body:JSON.stringify(payload)});
-  closeModal();
-  if(result.dexing_sync?.result==='error')toast(`Portadora salva; falha no Dexing: ${result.dexing_sync.error}`,true);else toast(result.dexing_sync?'Portadora salva e Dexing sincronizado':'Portadora salva');
-  refresh();
- }catch(e){toast(e.message,true)}
-};
 function openGeneralSettings(){const s=state.general_settings||{xmltv_sync_mode:'interval',xmltv_sync_minutes:60,xmltv_daily_time:'04:15',emitter_refresh_minutes:180,emitter_retry_minutes:5,detect_cache_updates:true};modal(`<div class="guide-head"><div><h2>Configurações gerais</h2><div class="muted">Sincronização das fontes e atualização dos emissores</div></div><button onclick="closeModal()">Fechar</button></div><div class="form-grid" style="margin-top:18px"><label>Modo de atualização das fontes<select id="gXmltvMode" onchange="generalSyncModeChanged()"><option value="interval" ${s.xmltv_sync_mode==='interval'?'selected':''}>Por intervalo</option><option value="daily" ${s.xmltv_sync_mode==='daily'?'selected':''}>Diariamente em horário definido</option></select></label><label id="gIntervalField">Intervalo XMLTV (minutos)<input id="gXmltvSync" type="number" min="5" max="10080" value="${s.xmltv_sync_minutes}"></label><label id="gDailyField">Horário diário — America/Sao_Paulo<input id="gXmltvDaily" type="time" value="${esc(s.xmltv_daily_time||'04:15')}"></label><label>Recarga pelo emissor (minutos)<input id="gEmitterRefresh" type="number" min="1" max="10080" value="${s.emitter_refresh_minutes}"></label><label>Nova tentativa após falha (minutos)<input id="gEmitterRetry" type="number" min="1" max="1440" value="${s.emitter_retry_minutes}"></label><label class="wide"><span>Detecção imediata do cache</span><select id="gDetectCache"><option value="1" ${s.detect_cache_updates?'selected':''}>Ativada — hot reload sem interromper o multicast</option><option value="0" ${!s.detect_cache_updates?'selected':''}>Desativada — respeitar o intervalo do emissor</option></select></label></div><p class="muted">No modo diário, a fonte é sincronizada uma vez por dia no horário escolhido. Se o servidor estava desligado nesse horário, a sincronização pendente acontece após iniciar. Mudanças reais na grade são carregadas a quente, mantendo o mesmo processo e o envio multicast. Ao salvar estas configurações, os emissores ativos reiniciam uma vez para receber os novos parâmetros.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveGeneralSettings()">Salvar e aplicar</button></div>`);generalSyncModeChanged()}
 function generalSyncModeChanged(){const daily=el('gXmltvMode')?.value==='daily';if(el('gIntervalField'))el('gIntervalField').style.display=daily?'none':'';if(el('gDailyField'))el('gDailyField').style.display=daily?'':'none'}
 async function saveGeneralSettings(){if(!confirm('Salvar a programação e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1'})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}}
-const openGeneralSettingsWithModulator=openGeneralSettings;
-openGeneralSettings=function(){openGeneralSettingsWithModulator();const grid=document.querySelector('.modal .form-grid'),s=state.general_settings||{};if(grid)grid.insertAdjacentHTML('beforeend',`<label>Monitorar moduladores a cada (horas)<input id="gModulatorMonitor" type="number" min="1" max="168" value="${s.modulator_monitor_hours||6}"></label>`)};
-saveGeneralSettings=async function(){if(!confirm('Salvar a programação e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1',modulator_monitor_hours:+el('gModulatorMonitor').value})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}};
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
 async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encodeURIComponent(id)}`);modal(`<h2>Logs do emissor</h2><pre style="background:#071b33;color:#dff4ff;padding:16px;border-radius:10px;max-height:65vh;overflow:auto;white-space:pre-wrap">${esc(j.log||'Sem logs.')}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true)}}
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
