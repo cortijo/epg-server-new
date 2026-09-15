@@ -39,7 +39,7 @@ from dexing import DexingClient, DexingError
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.25.0"
+PRODUCT_VERSION = "1.25.1"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -81,6 +81,10 @@ CONTENT_CATEGORIES = (
     "Filmes", "Notícias", "Entretenimento", "Esportes", "Infantil",
     "Música", "Cultura", "Sociedade", "Educação", "Lazer",
 )
+MODULATOR_DRIVERS = {
+    "dexing_nds3306i": {"name": "DeXin NDS3306I", "automated": True},
+    "manual": {"name": "Outro / configuração manual", "automated": False},
+}
 
 
 class ApiError(Exception):
@@ -860,6 +864,9 @@ def validate_carrier(carrier: dict[str, Any]) -> dict[str, Any]:
 
 def validate_modulator(value: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     name = bounded_text(value.get("name"), 100)
+    driver = str(value.get("driver") or (previous or {}).get("driver") or "dexing_nds3306i")
+    if driver not in MODULATOR_DRIVERS:
+        raise ApiError("Tipo de integração do modulador inválido")
     host = str(value.get("host") or "").strip()
     try:
         ipaddress.ip_address(host)
@@ -870,12 +877,14 @@ def validate_modulator(value: dict[str, Any], previous: dict[str, Any] | None = 
         raise ApiError("Protocolo do modulador inválido")
     username = bounded_text(value.get("username"), 64)
     password = str(value.get("password") or (previous or {}).get("password") or "")
-    if not name or not username or not password:
-        raise ApiError("Informe nome, usuário e senha do modulador")
+    if not name:
+        raise ApiError("Informe o nome do modulador")
+    if MODULATOR_DRIVERS[driver]["automated"] and (not username or not password):
+        raise ApiError("Informe usuário e senha para a integração automática")
     if len(password) > 256:
         raise ApiError("Senha do modulador muito longa")
     return {
-        "id": str(value.get("id") or slug_id("modulator")), "name": name,
+        "id": str(value.get("id") or slug_id("modulator")), "name": name, "driver": driver,
         "host": host, "scheme": scheme, "username": username, "password": password,
         "verify_tls": bool(value.get("verify_tls", False)),
         "created_at": int((previous or {}).get("created_at") or now_epoch()),
@@ -885,7 +894,7 @@ def validate_modulator(value: dict[str, Any], previous: dict[str, Any] | None = 
 
 def public_modulator(value: dict[str, Any]) -> dict[str, Any]:
     return {key: copy.deepcopy(value.get(key)) for key in
-            ("id", "name", "host", "scheme", "username", "verify_tls", "created_at", "updated_at")}
+            ("id", "name", "driver", "host", "scheme", "username", "verify_tls", "created_at", "updated_at")}
 
 
 class Store:
@@ -2223,7 +2232,10 @@ class Application:
         if carrier["auto_start"]:
             self.supervisor.action(carrier["id"], "start")
         result = {"result": "ok", "id": carrier["id"]}
-        if carrier.get("dexing", {}).get("auto_sync"):
+        linked_modulator = (self._modulator(carrier["dexing"]["modulator_id"])
+                            if carrier.get("dexing", {}).get("modulator_id") else None)
+        if (carrier.get("dexing", {}).get("auto_sync") and linked_modulator and
+                MODULATOR_DRIVERS.get(linked_modulator.get("driver", "dexing_nds3306i"), {}).get("automated")):
             try:
                 result["dexing_sync"] = self.sync_carrier_modulator(carrier["id"])
             except ApiError as error:
@@ -2273,11 +2285,16 @@ class Application:
 
     @staticmethod
     def _dexing_client(value: dict[str, Any]) -> DexingClient:
+        if value.get("driver", "dexing_nds3306i") != "dexing_nds3306i":
+            raise ApiError("Este tipo de modulador utiliza configuração manual")
         return DexingClient(value["host"], value["username"], value["password"],
                             value["scheme"], value.get("verify_tls", False))
 
     def test_modulator(self, modulator_id: str, output_ts: int = 1) -> dict[str, Any]:
         value = self._modulator(modulator_id)
+        if not MODULATOR_DRIVERS[value.get("driver", "dexing_nds3306i")]["automated"]:
+            return {"result": "manual", "modulator": public_modulator(value),
+                    "message": "Equipamento mantido em configuração manual"}
         try:
             client = self._dexing_client(value)
             client.login()
@@ -2297,6 +2314,8 @@ class Application:
         if not binding.get("modulator_id"):
             raise ApiError("A portadora não está vinculada a um modulador")
         value = self._modulator(binding["modulator_id"])
+        if not MODULATOR_DRIVERS[value.get("driver", "dexing_nds3306i")]["automated"]:
+            return {"result": "manual", "message": "Este modulador não possui integração automática"}
         try:
             result = self._dexing_client(value).synchronize(
                 int(binding["output_ts"]), carrier["destination"], int(carrier["port"]),
@@ -3339,7 +3358,7 @@ document.head.insertAdjacentHTML('beforeend','<style>.modal-back{left:224px;padd
 document.head.insertAdjacentHTML('beforeend','<style>.top .brand{width:190px;height:46px;background:url("/assets/omniepg_logotipo_escuro.svg") center/contain no-repeat}.top .brand>*{display:none}.rail-brand{height:58px;background:url("/assets/omniepg_logotipo_transparente.svg") center/contain no-repeat}.rail-brand>*{display:none}.brand-image{width:190px;height:46px;object-fit:contain}@media(max-width:900px){.rail-brand{height:42px;background-image:url("/assets/omniepg_icone.svg");background-size:38px 38px;border-bottom:0}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.source-usage-summary{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:6px 9px;border:1px solid #bad7ea;border-radius:8px;background:#eef8fe;color:#275675;font-size:12px}.source-usage-summary b{font-size:15px;color:var(--blue)}</style>');
 document.getElementById('railUsers')?.insertAdjacentHTML('beforebegin','<button id="railSettings" class="rail-admin" onclick="openGeneralSettings()"><span class="rail-icon">⚙</span><span class="rail-label">Configurações gerais</span></button>');
-document.getElementById('railSettings')?.insertAdjacentHTML('beforebegin','<button id="railModulators" class="rail-admin" onclick="openModulators()"><span class="rail-icon">▤</span><span class="rail-label">Moduladores Dexing</span></button>');
+document.getElementById('railSettings')?.insertAdjacentHTML('beforebegin','<button id="railModulators" class="rail-admin" onclick="openModulators()"><span class="rail-icon">▤</span><span class="rail-label">Moduladores</span></button>');
 setInterval(()=>{for(const id of ['railSettings','railModulators']){const button=document.getElementById(id);if(button)button.style.display=session?.user?.role==='admin'?'flex':'none'}},500);
 let state={carriers:[],sources:[]},sources=[],modulators=[],catalog=[],session={user:null},users=[],publications=[],expandedCarriers=new Set(),guideCache={},overviewMode='carriers',timelineData=null,timelineStart=0,timelineWindow=8*3600,timelineDay=0;const el=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.head.insertAdjacentHTML('beforeend','<style>.overview-switch{display:flex;gap:6px;padding:5px;background:#dfe9f2;border-radius:11px}.overview-switch button{min-width:130px}.overview-switch button.active{background:linear-gradient(120deg,var(--blue),var(--cyan));color:#fff}.channel-table{width:100%;min-width:1120px;border-collapse:collapse}.channel-table th,.channel-table td{padding:12px 14px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}.channel-table th{background:#edf4fa;color:#526477;font-size:11px;text-transform:uppercase}.channel-table tr:hover td{background:#f8fbfd}.channel-actions{display:flex;gap:6px;justify-content:flex-end}.channel-actions button{padding:8px 10px}.view-empty{padding:42px;text-align:center;color:var(--muted)}@media(max-width:760px){.overview-switch{width:100%}.overview-switch button{flex:1;min-width:0}}</style>');
@@ -3406,10 +3425,17 @@ function editModulator(id=''){const m=modulators.find(x=>x.id===id)||{scheme:'ht
 async function saveModulator(){try{await api('/api/modulators',{method:'POST',body:JSON.stringify({id:el('modId').value,name:el('modName').value,host:el('modHost').value,scheme:el('modScheme').value,username:el('modUser').value,password:el('modPassword').value,verify_tls:el('modTls').value==='1'})});toast('Modulador salvo');openModulators()}catch(e){toast(e.message,true)}}
 async function testModulator(id){try{toast('Autenticando e lendo o Output TS 1…');const r=await api('/api/modulators/test',{method:'POST',body:JSON.stringify({id,output_ts:1})});toast(`Conexão válida · ${r.inputs.length} inputs · ${r.program_count} programas`)}catch(e){toast(e.message,true)}}
 async function deleteModulator(id){if(!confirm('Excluir este modulador?'))return;try{await api('/api/modulators/delete',{method:'POST',body:JSON.stringify({id})});openModulators()}catch(e){toast(e.message,true)}}
+const openModulatorsByDriver=openModulators;
+openModulators=async function(){await openModulatorsByDriver();const title=document.querySelector('.modal h2'),description=document.querySelector('.modal .guide-head .muted');if(title)title.textContent='Moduladores';if(description)description.textContent='Integração por adaptadores; equipamentos sem API permanecem em configuração manual.'};
+const editModulatorByDriver=editModulator;
+editModulator=function(id=''){editModulatorByDriver(id);const m=modulators.find(x=>x.id===id)||{driver:'dexing_nds3306i'},grid=document.querySelector('.modal .form-grid');if(grid)grid.insertAdjacentHTML('afterbegin',`<label>Tipo de integração<select id="modDriver"><option value="dexing_nds3306i" ${m.driver!=='manual'?'selected':''}>DeXin NDS3306I — automática</option><option value="manual" ${m.driver==='manual'?'selected':''}>Outro — configuração manual</option></select></label>`);const title=document.querySelector('.modal h2');if(title)title.textContent=id?'Editar modulador':'Novo modulador'};
+saveModulator=async function(){try{await api('/api/modulators',{method:'POST',body:JSON.stringify({id:el('modId').value,name:el('modName').value,driver:el('modDriver')?.value||'dexing_nds3306i',host:el('modHost').value,scheme:el('modScheme').value,username:el('modUser').value,password:el('modPassword').value,verify_tls:el('modTls').value==='1'})});toast('Modulador salvo');openModulators()}catch(e){toast(e.message,true)}};
 async function syncDexingCarrier(id){try{toast('Sincronizando o Dexing…');const r=await api('/api/carriers/dexing-sync',{method:'POST',body:JSON.stringify({id})});const missing=(r.service_mapping||[]).filter(x=>!x.found).length;toast(`Dexing sincronizado · input IP${r.input_channel} · ${r.pids_added.length} PID(s) incluído(s)${missing?` · ${missing} SID(s) não localizado(s)`:''}`);refresh()}catch(e){toast(e.message,true)}}
 
 const openCarrierWithoutDexing=openCarrier;
 openCarrier=async function(id='',template=null,cloning=false){if(session.user?.role==='admin'&&!modulators.length){try{await loadModulators()}catch(_){}}await openCarrierWithoutDexing(id,template,cloning);const c=template||state.carriers.find(x=>x.id===id)||{},d=c.dexing||{};const serviceBlock=el('serviceRows');if(!serviceBlock)return;serviceBlock.insertAdjacentHTML('beforebegin',`<div id="dexingBindingCard" class="card wide" style="margin:16px 0;padding:14px"><h3>Integração Dexing NDS3306I</h3><div class="form-grid"><label>Modulador<select id="cDexingMod"><option value="">Não sincronizar</option>${modulators.map(m=>`<option value="${esc(m.id)}" ${m.id===d.modulator_id?'selected':''}>${esc(m.name)} · ${esc(m.host)}</option>`).join('')}</select></label><label>Output TS (1–48)<input id="cDexingTs" type="number" min="1" max="48" value="${d.output_ts||1}"></label><label>Interface de entrada<select id="cDexingData">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(d.data_interface||1)?'selected':''}>Data${n}</option>`).join('')}</select></label><label><span>Ao salvar</span><select id="cDexingAuto"><option value="1" ${d.auto_sync!==false?'selected':''}>Sincronizar automaticamente</option><option value="0" ${d.auto_sync===false?'selected':''}>Somente manual</option></select></label></div>${d.last_sync_at?`<p class="muted">Última sincronização: ${new Date(d.last_sync_at*1000).toLocaleString('pt-BR')} · ${esc(d.last_sync_status)} ${d.input_channel?`· IP${d.input_channel}`:''}</p>`:''}${id&&d.modulator_id?`<button onclick="syncDexingCarrier('${esc(id)}')">Sincronizar agora</button>`:''}</div>`)};
+const openCarrierGenericModulator=openCarrier;
+openCarrier=async function(id='',template=null,cloning=false){await openCarrierGenericModulator(id,template,cloning);const card=el('dexingBindingCard'),select=el('cDexingMod');if(card?.querySelector('h3'))card.querySelector('h3').textContent='Integração com modulador';if(select?.options[0])select.options[0].textContent='Sem integração automática'};
 saveCarrier=async function(){
  try{
   const original=state.carriers.find(c=>c.id===el('cId').value);

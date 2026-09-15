@@ -2,7 +2,9 @@
 
 ## Objetivo
 
-O OMNIEPG 1.25.0 cadastra um NDS3306I e vincula uma portadora EPG a um `Output TS`. A sincronização consulta o estado atual antes de alterar e não remove inputs, programas ou PIDs alheios à operação.
+O OMNIEPG 1.25.1 cadastra um NDS3306I e vincula uma portadora EPG a um `Output TS`. A sincronização consulta o estado atual antes de alterar e não remove inputs, programas ou PIDs alheios à operação.
+
+Desde a versão 1.25.1, a integração usa adaptadores por fabricante. O NDS3306I é o primeiro adaptador. Equipamentos de outros fabricantes podem ser cadastrados como **Outro / configuração manual**: o OMNIEPG continua emitindo EPG normalmente e não tenta alterar o modulador. Novos adaptadores devem implementar as mesmas operações de teste, inventário e sincronização, sem modificar o emissor multicast.
 
 ## Cadastro
 
