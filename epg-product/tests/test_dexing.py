@@ -25,6 +25,9 @@ class FakeDexing(DexingClient):
     def parse_program(self, output_index, input_index, timeout=60):
         self.calls.append(("parse", output_index, input_index))
 
+    def general(self, output_index):
+        return {"TSID": 60, "ONID": 61}
+
     def get_pid_rows(self, output_index):
         return [dict(row) for row in self.pid_rows]
 
@@ -45,6 +48,8 @@ class DexingTests(unittest.TestCase):
         self.assertIn(("parse", 6, 1), client.calls)
         self.assertEqual(client.pid_rows[0]["input_pid"], "0x1000")
         self.assertTrue(result["service_mapping"][0]["found"])
+        self.assertEqual(result["transport_stream_id"], 60)
+        self.assertEqual(result["original_network_id"], 61)
 
     def test_pid_merge_is_idempotent(self):
         client = FakeDexing("10.42.0.152", "admin", "admin")
@@ -77,6 +82,10 @@ class DexingTests(unittest.TestCase):
             {"input_channel": 4, "input_pid": 18, "output_pid": 18},
             {"input_channel": 4, "input_pid": 20, "output_pid": 20},
         ])
+
+    def test_transport_ids_accept_firmware_wrappers(self):
+        self.assertEqual(DexingClient.transport_ids({"stream": {"TSID": "60", "ONID": 61}}),
+                         {"transport_stream_id": 60, "original_network_id": 61})
 
 
 if __name__ == "__main__":

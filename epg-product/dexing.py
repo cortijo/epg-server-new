@@ -76,6 +76,35 @@ class DexingClient:
             "dropdown_select": output_index, "tab_index": 1,
         })
 
+    def general(self, output_index: int) -> dict[str, Any]:
+        return self._post("/cgi.php?proctype=stream", {
+            "op_code": 3, "tsout_ch_index": output_index,
+            "dropdown_select": output_index, "tab_index": 2,
+        })
+
+    @staticmethod
+    def transport_ids(value: Any) -> dict[str, int]:
+        """Find TSID/ONID across firmware response wrappers and spelling variants."""
+        found: dict[str, int] = {}
+        aliases = {"tsid": "transport_stream_id", "ts_id": "transport_stream_id",
+                   "transport_stream_id": "transport_stream_id", "onid": "original_network_id",
+                   "on_id": "original_network_id", "original_network_id": "original_network_id"}
+        def visit(item: Any) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    normalized = re.sub(r"[^a-z0-9_]", "", str(key).lower())
+                    if normalized in aliases and aliases[normalized] not in found:
+                        try:
+                            found[aliases[normalized]] = int(str(child), 0)
+                        except (TypeError, ValueError):
+                            pass
+                    visit(child)
+            elif isinstance(item, list):
+                for child in item:
+                    visit(child)
+        visit(value)
+        return found
+
     @staticmethod
     def find_input(inventory: dict[str, Any], address: str, port: int) -> dict[str, Any] | None:
         pattern = re.compile(r"^IP(\d+)_Data(\d+)_([0-9.]+):(\d+)$")
@@ -197,6 +226,7 @@ class DexingClient:
             raise DexingError("O input foi solicitado, mas não apareceu no inventário do Dexing")
         self.parse_program(output_index, found["input_index"])
         inventory = self.inventory(output_index)
+        transport = self.transport_ids(self.general(output_index))
         pid_result = self.ensure_pid_passthrough(output_index, found["input_channel"])
         programs = self.output_programs(inventory)
         by_number = {int(item.get("program_number", item.get("prg_number", -1))): item
@@ -208,4 +238,4 @@ class DexingClient:
         return {"input_created": created, "input_channel": found["input_channel"],
                 "input_name": found.get("input_name", ""), "output_ts": output_ts,
                 "pids_added": pid_result["added"], "pid_count": len(pid_result["rows"]),
-                "programs": programs, "service_mapping": mapped}
+                "programs": programs, "service_mapping": mapped, **transport}

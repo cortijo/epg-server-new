@@ -25,6 +25,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -39,7 +40,7 @@ from dexing import DexingClient, DexingError
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.25.2"
+PRODUCT_VERSION = "1.26.0"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -65,6 +66,7 @@ DEFAULT_GENERAL_SETTINGS = {
     "emitter_refresh_minutes": 180,
     "emitter_retry_minutes": 5,
     "detect_cache_updates": True,
+    "modulator_monitor_hours": 6,
 }
 BRAZIL_TZ = timezone(timedelta(hours=-3))
 PASSWORD_ITERATIONS = 310_000
@@ -552,6 +554,7 @@ def validate_general_settings(value: dict[str, Any]) -> dict[str, Any]:
         "xmltv_sync_minutes": (5, 10080),
         "emitter_refresh_minutes": (1, 10080),
         "emitter_retry_minutes": (1, 1440),
+        "modulator_monitor_hours": (1, 168),
     }
     for key, (minimum, maximum) in limits.items():
         try:
@@ -866,6 +869,9 @@ def validate_carrier(carrier: dict[str, Any]) -> dict[str, Any]:
             "last_sync_status": str(dexing.get("last_sync_status") or "")[:32],
             "last_sync_error": str(dexing.get("last_sync_error") or "")[:500],
             "input_channel": int(dexing.get("input_channel") or 0),
+            "last_monitor_at": int(dexing.get("last_monitor_at") or 0),
+            "monitor_status": str(dexing.get("monitor_status") or "pending")[:32],
+            "monitor_error": str(dexing.get("monitor_error") or "")[:500],
         }
     return result
 
@@ -1570,7 +1576,40 @@ class Application:
             return
         while not self.source_sync_stopping.is_set():
             self.sync_due_sources_once()
+            self.monitor_due_modulators_once()
             self.source_sync_stopping.wait(60)
+
+    def monitor_due_modulators_once(self) -> dict[str, Any]:
+        snapshot = self.store.snapshot()
+        interval = int(snapshot.get("general_settings", {}).get("modulator_monitor_hours", 6)) * 3600
+        current = now_epoch()
+        checked, errors = 0, []
+        modulators = {item["id"]: item for item in snapshot.get("modulators", [])}
+        for carrier in snapshot["carriers"]:
+            binding = carrier.get("dexing") or {}
+            value = modulators.get(binding.get("modulator_id"))
+            if (not value or not MODULATOR_DRIVERS.get(value.get("driver", "dexing_nds3306i"), {}).get("automated") or
+                    current - int(binding.get("last_monitor_at") or 0) < interval):
+                continue
+            try:
+                client = self._dexing_client(value); client.login()
+                inventory = client.inventory(int(binding["output_ts"]) - 1)
+                found = client.find_input(inventory, carrier["destination"], int(carrier["port"]))
+                if not found:
+                    raise ApiError("Multicast não encontrado no inventário do modulador")
+                if not int(found.get("ts_lock") or 0) or float(found.get("bitrate_valid") or 0) <= 0:
+                    raise ApiError("Multicast cadastrado, porém sem lock ou sem bitrate")
+                status, message = "online", ""
+            except Exception as error:
+                status, message = "error", str(error); errors.append({"carrier_id": carrier["id"], "error": message})
+            with self.store.lock:
+                stored = next((item for item in self.store.data["carriers"] if item["id"] == carrier["id"]), None)
+                if stored and stored.get("dexing"):
+                    stored["dexing"].update({"last_monitor_at": current, "monitor_status": status,
+                                              "monitor_error": message})
+                    self.store.save()
+            checked += 1
+        return {"checked": checked, "errors": errors}
 
     def sync_due_sources_once(self) -> dict[str, Any]:
         snapshot = self.store.snapshot()
@@ -2315,6 +2354,8 @@ class Application:
                 "program_count": len(programs)}
 
     def sync_carrier_modulator(self, carrier_id: str) -> dict[str, Any]:
+        was_active = any(item["id"] == carrier_id and item.get("active")
+                         for item in self.supervisor.state()["carriers"])
         carrier = next((item for item in self.store.snapshot()["carriers"] if item["id"] == carrier_id), None)
         if not carrier:
             raise ApiError("Portadora não encontrada", HTTPStatus.NOT_FOUND)
@@ -2332,15 +2373,56 @@ class Application:
         except DexingError as error:
             result = {"result": "error", "error": str(error)}
             status, error_text = "error", str(error)
+        identifiers_changed = False
         with self.store.lock:
             stored = next((item for item in self.store.data["carriers"] if item["id"] == carrier_id), None)
             if stored and stored.get("dexing"):
+                for result_key, carrier_key in (("transport_stream_id", "transport_stream_id"),
+                                                ("original_network_id", "original_network_id")):
+                    if result.get(result_key) and stored[carrier_key] != int(result[result_key]):
+                        stored[carrier_key] = int(result[result_key]); identifiers_changed = True
+                def normalized_name(text: Any) -> str:
+                    plain = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
+                    return re.sub(r"[^a-z0-9]", "", plain.lower())
+                programs_by_name: dict[str, list[dict[str, Any]]] = {}
+                for program in result.get("programs", []):
+                    programs_by_name.setdefault(normalized_name(program.get("service_name")), []).append(program)
+                matched = {service["id"]: programs_by_name.get(normalized_name(service["name"]), [])
+                           for service in stored["services"]}
+                used_sids = {service["service_id"] for service in stored["services"]
+                             if len(matched[service["id"]]) != 1}
+                imported = []
+                for service in stored["services"]:
+                    matches = matched[service["id"]]
+                    if len(matches) == 1:
+                        sid = int(matches[0].get("program_number", matches[0].get("prg_number")))
+                        if sid in used_sids:
+                            imported.append({"service_id": service["service_id"],
+                                             "configured_name": service["name"], "dexing_name": "",
+                                             "found": False, "reason": "SID do modulador colide com outro canal"})
+                            continue
+                        used_sids.add(sid)
+                        if service["service_id"] != sid:
+                            service["service_id"] = sid; identifiers_changed = True
+                        imported.append({"service_id": sid, "configured_name": service["name"],
+                                         "dexing_name": matches[0].get("service_name", ""), "found": True})
+                    else:
+                        imported.append({"service_id": service["service_id"],
+                                         "configured_name": service["name"], "dexing_name": "", "found": False,
+                                         "reason": "nome ausente ou ambíguo no Output TS"})
+                result["service_mapping"] = imported
                 stored["dexing"].update({"last_sync_at": now_epoch(), "last_sync_status": status,
                                           "last_sync_error": error_text,
-                                          "input_channel": int(result.get("input_channel") or 0)})
+                                          "input_channel": int(result.get("input_channel") or 0),
+                                          "last_monitor_at": now_epoch(),
+                                          "monitor_status": "online" if status == "ok" else "error",
+                                          "monitor_error": error_text})
                 self.store.save()
         if status == "error":
             raise ApiError(error_text, HTTPStatus.BAD_GATEWAY)
+        if identifiers_changed and was_active:
+            self.supervisor.remove(carrier_id)
+            self.supervisor.action(carrier_id, "start")
         return {"result": "ok", **result}
 
     def save_logo(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -3391,6 +3473,9 @@ function renderChannelOverview(carriers){const errors=state.epg_health?.errors||
 function utcOffsetLabel(minutes){const sign=minutes<0?'-':'+';const absolute=Math.abs(minutes);return `UTC${sign}${String(Math.floor(absolute/60)).padStart(2,'0')}:${String(absolute%60).padStart(2,'0')}`}
 function clockLabel(c){return c.clock_mode==='custom'?`${utcOffsetLabel(c.clock_utc_offset_minutes??-180)} · correção ${c.clock_correction_minutes>0?'+':''}${c.clock_correction_minutes||0} min`:'Padrão UTC-03:00'}
 function carrierRows(c){const opened=expandedCarriers.has(c.id),guide=guideCache[c.id],disabled=state.license?.valid?'':' disabled',health=healthCarrier(c.id),label=health.status==='ok'?'EPG normal':health.status==='error'?'Todos os canais com erro':`${health.failing+health.warnings} canal(is) com problema`;return `<tr class="main-row health-${health.status}"><td><div class="carrier-name"><i class="health-dot ${health.status}"></i>${esc(c.name)}</div><div class="carrier-sub">TSID ${c.transport_stream_id} · ONID ${c.original_network_id} · ${esc(clockLabel(c))}</div></td><td><b>${esc(c.destination)}:${c.port}</b><div class="carrier-sub">${(c.bitrate/1000).toLocaleString('pt-BR')} kbit/s</div></td><td><b>${c.services.length}</b> serviço(s)<div class="health-message ${health.status}">${esc(label)}</div></td><td><span class="badge ${esc(c.status)}">${c.active?'Em transmissão':c.status==='error'?'Falha':'Parada'}</span>${c.last_error?`<div class="error-text carrier-sub">${esc(c.last_error)}</div>`:''}</td><td class="actions-col"><div class="action-stack"><button id="programButton-${esc(c.id)}" class="primary wide" aria-expanded="${opened}" onclick="togglePrograms('${esc(c.id)}')"${disabled}>${opened?'Ocultar programação':'Ver programação'}</button><button onclick="actionCarrier('${esc(c.id)}','${c.active?'restart':'start'}')"${disabled}>${c.active?'Reiniciar':'Iniciar'}</button>${c.active?`<button onclick="actionCarrier('${esc(c.id)}','stop')"${disabled}>Parar</button>`:'<span></span>'}<button onclick="openCarrier('${esc(c.id)}')"${disabled}>Editar</button><button onclick="cloneCarrier('${esc(c.id)}')"${disabled}>Clonar</button><button onclick="openLogs('${esc(c.id)}')"${disabled}>Logs</button><button class="danger" onclick="deleteCarrier('${esc(c.id)}')"${disabled}>Excluir</button></div></td></tr><tr id="programs-${esc(c.id)}" class="program-row ${opened?'open':''}"><td colspan="5"><div class="program-panel">${opened?(guide?programPanel(c,guide):'<div class="muted">Carregando programação…</div>'):''}</div></td></tr>`}
+function modulatorStateLabel(c){const d=c.dexing||{};if(!d.modulator_id)return '';const m=modulators.find(x=>x.id===d.modulator_id);if(m?.driver==='manual')return '<span class="badge">Modulador manual</span>';if(d.last_sync_status==='error')return `<span class="badge error">Integração com erro</span><div class="error-text carrier-sub">${esc(d.last_sync_error||d.monitor_error||'')}</div>`;if(d.last_sync_status==='ok')return `<span class="badge running">Modulador sincronizado</span><div class="carrier-sub">Multicast: ${d.monitor_status==='online'?'online':d.monitor_status==='error'?'falha':'aguardando verificação'}</div>`;return '<span class="badge">Modulador pendente</span>'}
+const renderWithModulatorStatus=render;
+render=function(){renderWithModulatorStatus();if(mainPage==='carriers'&&overviewMode==='carriers')document.querySelectorAll('.carrier-table tr.main-row').forEach((row,index)=>{const c=(state.carriers||[])[index],target=row?.children?.[3];if(target&&c)target.insertAdjacentHTML('beforeend',`<div style="margin-top:7px">${modulatorStateLabel(c)}</div>`)})};
 function programPanel(c,g){return `<div class="program-title"><div><b>Programação da portadora</b><div class="muted">${esc(g.timezone||'America/Sao_Paulo')} · ${c.services.length} serviço(s)</div></div></div><div class="program-list">${g.services.map(s=>{const health=healthService(c.id,s.id);return `<div class="program-line health-${health.status}"><div><b><i class="health-dot ${health.status}"></i>${esc(s.name)}</b><div class="muted">${esc(s.epg_channel_id)}</div><div class="health-message ${health.status}">${esc(health.message)}</div></div><div>SID ${s.service_id}</div><div class="program-detail"><small class="muted">HORÁRIO</small><div>${s.current?`${fmt(s.current.start)}–${fmt(s.current.stop)}`:'--:--'}</div></div><div class="program-detail"><small class="muted">NO AR AGORA</small><div class="program-now">${esc(s.current?.title||'Sem programa no ar')}</div>${s.current?`<div class="progress"><i style="width:${s.current.progress||0}%"></i></div>`:''}</div><div class="program-detail"><small class="muted">A SEGUIR</small><div>${esc(s.next?.title||'Sem próxima atração')}</div></div><button onclick="openGuide('${esc(c.id)}','${esc(s.id)}')">Ver grade</button></div>`}).join('')||'<div class="muted">Nenhum serviço cadastrado.</div>'}</div>`}
 function openEpgErrors(){const errors=state.epg_health?.errors||[];modal(`<div class="guide-head"><div><h2>Central de erros do EPG</h2><div class="muted">Diagnóstico do XMLTV e do processo de emissão multicast · atualizado ${new Date((state.epg_health?.generated_at||0)*1000).toLocaleString('pt-BR')}</div></div><button onclick="closeModal()">Fechar</button></div>${errors.length?`<div class="table-wrap" style="margin-top:15px"><table class="health-error-table"><thead><tr><th>Portadora</th><th>Canal</th><th>Fonte XMLTV</th><th>ID XMLTV</th><th>Diagnóstico</th></tr></thead><tbody>${errors.map(e=>`<tr><td>${esc(e.carrier_name)}</td><td><b><i class="health-dot ${e.status}"></i>${esc(e.service_name)}</b></td><td><b>${esc(e.source_name||e.source_id)}</b><div class="muted"><code>${esc(e.source_url||'URL não disponível')}</code></div></td><td><code>${esc(e.epg_channel_id)}</code></td><td><b>${esc(e.code)}</b><div class="health-message ${e.status}">${esc(e.message)}</div></td></tr>`).join('')}</tbody></table></div>`:'<div class="card empty"><h3>Todos os canais estão com programação normal</h3><p>Nenhum erro de XMLTV ou emissão foi detectado.</p></div>'}`,'publication-modal')}
 const TIMELINE_STEP=2*3600;
@@ -3459,6 +3544,9 @@ saveCarrier=async function(){
 function openGeneralSettings(){const s=state.general_settings||{xmltv_sync_mode:'interval',xmltv_sync_minutes:60,xmltv_daily_time:'04:15',emitter_refresh_minutes:180,emitter_retry_minutes:5,detect_cache_updates:true};modal(`<div class="guide-head"><div><h2>Configurações gerais</h2><div class="muted">Sincronização das fontes e atualização dos emissores</div></div><button onclick="closeModal()">Fechar</button></div><div class="form-grid" style="margin-top:18px"><label>Modo de atualização das fontes<select id="gXmltvMode" onchange="generalSyncModeChanged()"><option value="interval" ${s.xmltv_sync_mode==='interval'?'selected':''}>Por intervalo</option><option value="daily" ${s.xmltv_sync_mode==='daily'?'selected':''}>Diariamente em horário definido</option></select></label><label id="gIntervalField">Intervalo XMLTV (minutos)<input id="gXmltvSync" type="number" min="5" max="10080" value="${s.xmltv_sync_minutes}"></label><label id="gDailyField">Horário diário — America/Sao_Paulo<input id="gXmltvDaily" type="time" value="${esc(s.xmltv_daily_time||'04:15')}"></label><label>Recarga pelo emissor (minutos)<input id="gEmitterRefresh" type="number" min="1" max="10080" value="${s.emitter_refresh_minutes}"></label><label>Nova tentativa após falha (minutos)<input id="gEmitterRetry" type="number" min="1" max="1440" value="${s.emitter_retry_minutes}"></label><label class="wide"><span>Detecção imediata do cache</span><select id="gDetectCache"><option value="1" ${s.detect_cache_updates?'selected':''}>Ativada — hot reload sem interromper o multicast</option><option value="0" ${!s.detect_cache_updates?'selected':''}>Desativada — respeitar o intervalo do emissor</option></select></label></div><p class="muted">No modo diário, a fonte é sincronizada uma vez por dia no horário escolhido. Se o servidor estava desligado nesse horário, a sincronização pendente acontece após iniciar. Mudanças reais na grade são carregadas a quente, mantendo o mesmo processo e o envio multicast. Ao salvar estas configurações, os emissores ativos reiniciam uma vez para receber os novos parâmetros.</p><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveGeneralSettings()">Salvar e aplicar</button></div>`);generalSyncModeChanged()}
 function generalSyncModeChanged(){const daily=el('gXmltvMode')?.value==='daily';if(el('gIntervalField'))el('gIntervalField').style.display=daily?'none':'';if(el('gDailyField'))el('gDailyField').style.display=daily?'':'none'}
 async function saveGeneralSettings(){if(!confirm('Salvar a programação e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1'})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}}
+const openGeneralSettingsWithModulator=openGeneralSettings;
+openGeneralSettings=function(){openGeneralSettingsWithModulator();const grid=document.querySelector('.modal .form-grid'),s=state.general_settings||{};if(grid)grid.insertAdjacentHTML('beforeend',`<label>Monitorar moduladores a cada (horas)<input id="gModulatorMonitor" type="number" min="1" max="168" value="${s.modulator_monitor_hours||6}"></label>`)};
+saveGeneralSettings=async function(){if(!confirm('Salvar a programação e reiniciar os emissores ativos agora?'))return;try{const result=await api('/api/settings',{method:'POST',body:JSON.stringify({xmltv_sync_mode:el('gXmltvMode').value,xmltv_sync_minutes:+el('gXmltvSync').value,xmltv_daily_time:el('gXmltvDaily').value,emitter_refresh_minutes:+el('gEmitterRefresh').value,emitter_retry_minutes:+el('gEmitterRetry').value,detect_cache_updates:el('gDetectCache').value==='1',modulator_monitor_hours:+el('gModulatorMonitor').value})});state.general_settings=result.settings;closeModal();toast(`Configurações aplicadas; ${result.restarted||0} emissor(es) reiniciado(s)`);setTimeout(refresh,600)}catch(e){toast(e.message,true)}};
 async function openGuide(carrierId,serviceId){try{const g=await api(`/api/guide?carrier_id=${encodeURIComponent(carrierId)}`),s=g.services.find(x=>x.id===serviceId);modal(`<div class="guide-head"><div><h2>${esc(s.name)}</h2><div class="muted">SID ${s.service_id} · ${esc(s.epg_channel_id)} · ${esc(g.timezone)}</div></div><button onclick="closeModal()">Fechar</button></div>${s.current?`<div class="card" style="padding:16px;margin-top:15px"><small>NO AR AGORA</small><h3>${esc(s.current.title)}</h3><p>${esc(s.current.description)}</p><b>${fmt(s.current.start)} — ${fmt(s.current.stop)}</b><div class="progress"><i style="width:${s.current.progress}%"></i></div></div>`:'<p class="muted">Nenhum programa identificado no ar.</p>'}<div class="guide-list">${s.schedule.map(p=>`<div class="guide-item ${p===s.current?'current':''}"><b>${fmt(p.start)}<br><span class="muted">${fmt(p.stop)}</span></b><div><strong>${esc(p.title)}</strong><div class="muted">${esc(p.category||p.description||'')}</div></div></div>`).join('')||'<p>Sem grade para hoje.</p>'}</div>`)}catch(e){toast(e.message,true)}}
 async function openLogs(id){try{const j=await api(`/api/logs?carrier_id=${encodeURIComponent(id)}`);modal(`<h2>Logs do emissor</h2><pre style="background:#071b33;color:#dff4ff;padding:16px;border-radius:10px;max-height:65vh;overflow:auto;white-space:pre-wrap">${esc(j.log||'Sem logs.')}</pre><div class="modal-actions"><button onclick="closeModal()">Fechar</button></div>`)}catch(e){toast(e.message,true)}}
 function openTvSimulator(){const active=(state.carriers||[]).filter(c=>c.active);modal(`<div class="guide-head"><div><h2>Simulador de TV ISDB-TB</h2><div class="muted">Analisa exatamente os datagramas gerados pelo EPG Server antes do envio multicast.</div></div><button onclick="closeModal()">Fechar</button></div><div class="card" style="padding:18px;margin-top:16px"><label>Portadora ativa<select id="tvCarrier">${active.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.destination)}:${c.port}</option>`).join('')}</select></label><p class="muted">O teste captura quatro segundos sem interromper a transmissão e reconstrói os metadados como um receptor ISDB-TB.</p></div><div class="modal-actions"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="runTvSimulator()" ${active.length?'':'disabled'}>${active.length?'Capturar e analisar':'Nenhuma portadora ativa'}</button></div>`)}
