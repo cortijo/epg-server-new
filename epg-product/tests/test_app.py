@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.26.0")
+        self.assertEqual(document["info"]["version"], "1.27.0")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -880,6 +880,11 @@ class EpgProductTests(unittest.TestCase):
     def test_carrier_clone_is_safe_and_requires_new_destination(self):
         self.assertIn("function cloneCarrier(id)", INDEX_HTML)
         self.assertIn(">Clonar</button>", INDEX_HTML)
+        self.assertIn("1. Integração com modulador", INDEX_HTML)
+        self.assertIn("Sem integração automática — preenchimento manual", INDEX_HTML)
+        self.assertIn("Sincronizado com o modulador", INDEX_HTML)
+        self.assertIn("async function inspectCarrierModulator()", INDEX_HTML)
+        self.assertIn("Program Number(s) disponível(is)", INDEX_HTML)
         self.assertIn("destination:'',auto_start:false", INDEX_HTML)
         self.assertIn("services:original.services.map(service=>({...service,id:''}))", INDEX_HTML)
         self.assertIn("não altera a portadora original", INDEX_HTML)

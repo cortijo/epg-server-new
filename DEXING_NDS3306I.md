@@ -11,8 +11,13 @@ Desde a versão 1.25.1, a integração usa adaptadores por fabricante. O NDS3306
 1. Entre como administrador e abra **Moduladores Dexing**.
 2. Cadastre nome, IP, protocolo, usuário e senha.
 3. Use **Testar**. O teste autentica e lê o Output TS 1 sem gravar.
-4. Edite uma portadora e selecione equipamento, `Output TS` (1–48), interface `Data1`–`Data4` e modo automático ou manual.
-5. Salve. No modo manual, use **Sincronizar agora**.
+4. Ao criar ou editar uma portadora, escolha primeiro a integração no topo do formulário.
+5. Ao selecionar equipamento e `Output TS` (1–48), o OMNIEPG faz uma consulta somente leitura, preenche TSID/ONID e mostra os canais como `Program Number — nome` no campo SID.
+6. Selecione o Program Number correto para cada canal, a interface `Data1`–`Data4` e salve.
+7. Use **Sem integração automática** quando o equipamento não tiver adaptador: TSID, ONID e SID continuam com preenchimento manual.
+8. No modo automático, o salvamento executa a sincronização do multicast e dos PIDs. No modo “Somente manual”, use **Sincronizar agora**.
+
+Os valores obtidos na consulta aparecem como **Sincronizado com o modulador**. A leitura do formulário não executa Parse Program e não grava no equipamento; essas alterações só acontecem ao salvar/sincronizar.
 
 `Output TS 1` na tela corresponde ao índice `0` da API. A conversão é automática.
 

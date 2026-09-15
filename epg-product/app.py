@@ -40,7 +40,7 @@ from dexing import DexingClient, DexingError
 
 
 PRODUCT_NAME = "OMNIEPG"
-PRODUCT_VERSION = "1.26.0"
+PRODUCT_VERSION = "1.27.0"
 PRODUCT_DEVELOPER = "Julio Cortijo"
 HOT_RELOAD_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_UPDATE_REPOSITORY = "cortijo/epgserver2"
@@ -2345,13 +2345,15 @@ class Application:
         try:
             client = self._dexing_client(value)
             client.login()
-            inventory = client.inventory(integer(output_ts, "Output TS", 1, 48) - 1)
+            output_index = integer(output_ts, "Output TS", 1, 48) - 1
+            inventory = client.inventory(output_index)
+            transport = client.transport_ids(client.general(output_index))
         except DexingError as error:
             raise ApiError(str(error), HTTPStatus.BAD_GATEWAY) from error
         programs = client.output_programs(inventory)
         return {"result": "ok", "modulator": public_modulator(value),
                 "inputs": inventory.get("tsin", []), "programs": programs,
-                "program_count": len(programs)}
+                "program_count": len(programs), **transport}
 
     def sync_carrier_modulator(self, carrier_id: str) -> dict[str, Any]:
         was_active = any(item["id"] == carrier_id and item.get("active")
@@ -3529,6 +3531,16 @@ const openCarrierWithoutDexing=openCarrier;
 openCarrier=async function(id='',template=null,cloning=false){if(session.user?.role==='admin'&&!modulators.length){try{await loadModulators()}catch(_){}}await openCarrierWithoutDexing(id,template,cloning);const c=template||state.carriers.find(x=>x.id===id)||{},d=c.dexing||{};const serviceBlock=el('serviceRows');if(!serviceBlock)return;serviceBlock.insertAdjacentHTML('beforebegin',`<div id="dexingBindingCard" class="card wide" style="margin:16px 0;padding:14px"><h3>Integração Dexing NDS3306I</h3><div class="form-grid"><label>Modulador<select id="cDexingMod"><option value="">Não sincronizar</option>${modulators.map(m=>`<option value="${esc(m.id)}" ${m.id===d.modulator_id?'selected':''}>${esc(m.name)} · ${esc(m.host)}</option>`).join('')}</select></label><label>Output TS (1–48)<input id="cDexingTs" type="number" min="1" max="48" value="${d.output_ts||1}"></label><label>Interface de entrada<select id="cDexingData">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(d.data_interface||1)?'selected':''}>Data${n}</option>`).join('')}</select></label><label><span>Ao salvar</span><select id="cDexingAuto"><option value="1" ${d.auto_sync!==false?'selected':''}>Sincronizar automaticamente</option><option value="0" ${d.auto_sync===false?'selected':''}>Somente manual</option></select></label></div>${d.last_sync_at?`<p class="muted">Última sincronização: ${new Date(d.last_sync_at*1000).toLocaleString('pt-BR')} · ${esc(d.last_sync_status)} ${d.input_channel?`· IP${d.input_channel}`:''}</p>`:''}${id&&d.modulator_id?`<button onclick="syncDexingCarrier('${esc(id)}')">Sincronizar agora</button>`:''}</div>`)};
 const openCarrierGenericModulator=openCarrier;
 openCarrier=async function(id='',template=null,cloning=false){await openCarrierGenericModulator(id,template,cloning);const card=el('dexingBindingCard'),select=el('cDexingMod');if(card?.querySelector('h3'))card.querySelector('h3').textContent='Integração com modulador';if(select?.options[0])select.options[0].textContent='Sem integração automática'};
+let carrierModulatorSnapshot=null;
+function automaticModulatorOptions(selected=''){return modulators.filter(m=>m.driver!=='manual').map(m=>`<option value="${esc(m.id)}" ${m.id===selected?'selected':''}>${esc(m.name)} · ${esc(m.host)}</option>`).join('')}
+function manualSidFields(){document.querySelectorAll('.service-edit').forEach(row=>{const field=row.querySelector('.s-sid');if(field?.tagName==='SELECT'){const input=document.createElement('input');input.className='s-sid';input.type='number';input.min='1';input.max='65535';input.value=field.value||'1';field.replaceWith(input)}})}
+function chooseModulatorProgram(select){const option=select.selectedOptions[0],row=select.closest('.service-edit'),name=row?.querySelector('.s-name');if(name&&option?.dataset.name&&!name.value.trim())name.value=option.dataset.name}
+function modulatorSidFields(programs){const sorted=[...(programs||[])].filter(p=>Number(p.program_number??p.prg_number)>0).sort((a,b)=>Number(a.program_number??a.prg_number)-Number(b.program_number??b.prg_number));document.querySelectorAll('.service-edit').forEach(row=>{const field=row.querySelector('.s-sid'),current=Number(field?.value||1),options=sorted.map(p=>{const sid=Number(p.program_number??p.prg_number),name=p.service_name||`Canal ${sid}`;return `<option value="${sid}" data-name="${esc(name)}" ${sid===current?'selected':''}>${sid} — ${esc(name)}</option>`}).join('');const select=document.createElement('select');select.className='s-sid';select.onchange=()=>chooseModulatorProgram(select);select.innerHTML=(sorted.some(p=>Number(p.program_number??p.prg_number)===current)?'':`<option value="${current}" selected>${current} — SID atual (não localizado)</option>`)+options;field?.replaceWith(select)})}
+async function inspectCarrierModulator(){const modulatorId=el('cDexingMod')?.value,status=el('carrierModulatorStatus');if(!modulatorId){carrierModulatorSnapshot=null;el('cTsid').readOnly=false;el('cOnid').readOnly=false;manualSidFields();if(status)status.innerHTML='<span class="muted">Preenchimento manual de TSID, ONID e SID.</span>';return}if(status)status.innerHTML='<span class="muted">Consultando o Output TS no modulador…</span>';try{const result=await api('/api/modulators/test',{method:'POST',body:JSON.stringify({id:modulatorId,output_ts:+el('cDexingTs').value})});if(result.result!=='ok')throw new Error('O equipamento selecionado não oferece sincronização automática');if(!result.transport_stream_id||!result.original_network_id)throw new Error('O modulador não informou TSID/ONID para este Output TS');carrierModulatorSnapshot=result;el('cTsid').value=result.transport_stream_id;el('cOnid').value=result.original_network_id;el('cTsid').readOnly=true;el('cOnid').readOnly=true;modulatorSidFields(result.programs);status.innerHTML=`<span class="badge running">Sincronizado com o modulador</span><span class="muted"> TSID ${result.transport_stream_id} · ONID ${result.original_network_id} · ${result.program_count} Program Number(s) disponível(is)</span>`}catch(e){carrierModulatorSnapshot=null;el('cTsid').readOnly=true;el('cOnid').readOnly=true;manualSidFields();if(status)status.innerHTML=`<span class="badge error">Falha ao consultar o modulador</span><div class="error-text">${esc(e.message)}</div>`}}
+const openCarrierIntegrationFirst=openCarrier;
+openCarrier=async function(id='',template=null,cloning=false){await openCarrierIntegrationFirst(id,template,cloning);const c=template||state.carriers.find(x=>x.id===id)||{},d=c.dexing||{},card=el('dexingBindingCard');if(!card)return;const heading=card.parentElement.querySelector('h2');if(heading)heading.insertAdjacentElement('afterend',card);card.innerHTML=`<h3>1. Integração com modulador</h3><p class="muted">Selecione primeiro como esta portadora será configurada.</p><div class="form-grid"><label class="wide">Integração<select id="cDexingMod" onchange="inspectCarrierModulator()"><option value="">Sem integração automática — preenchimento manual</option>${automaticModulatorOptions(d.modulator_id||'')}</select></label><label>Output TS (1–48)<input id="cDexingTs" type="number" min="1" max="48" value="${d.output_ts||1}" onchange="inspectCarrierModulator()"></label><label>Interface de entrada<select id="cDexingData">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(d.data_interface||1)?'selected':''}>Data${n}</option>`).join('')}</select></label><label><span>Ao salvar</span><select id="cDexingAuto"><option value="1" ${d.auto_sync!==false?'selected':''}>Sincronizar automaticamente</option><option value="0" ${d.auto_sync===false?'selected':''}>Somente manual</option></select></label></div><div id="carrierModulatorStatus" style="margin-top:10px"></div>${id&&d.modulator_id?`<button style="margin-top:10px" onclick="syncDexingCarrier('${esc(id)}')">Sincronizar agora</button>`:''}`;carrierModulatorSnapshot=null;if(d.modulator_id)await inspectCarrierModulator();else await inspectCarrierModulator()};
+const addServiceRowWithModulator=addServiceRow;
+addServiceRow=function(){addServiceRowWithModulator();if(carrierModulatorSnapshot)modulatorSidFields(carrierModulatorSnapshot.programs)};
 saveCarrier=async function(){
  try{
   const original=state.carriers.find(c=>c.id===el('cId').value);
