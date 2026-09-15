@@ -125,7 +125,8 @@ class DexingClient:
         return self._post("/cgi.php?proctype=mux_edit_input_ch", {
             "op_code": 5, "ip_index": 0, "data_interface": firmware_interface,
             "internal_interface": 0, "ch_step_en": 0, "step_channel": 1,
-            "start_channel": 1, "end_channel": 24, "ip_bitrate_mode": "on",
+            "start_channel": output_index + 1, "end_channel": output_index + 1,
+            "ip_bitrate_mode": "on",
             "ip_bitrate": "38.000", "ip_en": "on",
             "ipaddr": address, "step_en_ip": 0, "step_ip": 1,
             "ipaddr_end": address, "port": port, "step_en": 0,
@@ -232,6 +233,10 @@ class DexingClient:
                     time.sleep(1)
         if not found:
             detail = str(add_result)[:160] if 'add_result' in locals() else ""
+            if isinstance(add_result, dict) and int(add_result.get("mount_flag") or 0) == 1:
+                raise DexingError(
+                    "O multicast já está cadastrado em outra entrada do Dexing, mas não está "
+                    f"disponível neste Output TS. IP/porta: {address}:{port}")
             raise DexingError(f"O input foi solicitado, mas não apareceu no inventário do Dexing. Resposta: {detail}")
         self.parse_program(output_index, found["input_index"])
         inventory = self.inventory(output_index)

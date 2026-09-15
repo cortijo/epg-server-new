@@ -99,6 +99,8 @@ class DexingTests(unittest.TestCase):
         self.assertEqual(captured["fields"]["data_interface"], 2)
         self.assertEqual(captured["fields"]["tsout_ch_index"], 3)
         self.assertEqual(captured["fields"]["dropdown_select"], 3)
+        self.assertEqual(captured["fields"]["start_channel"], 4)
+        self.assertEqual(captured["fields"]["end_channel"], 4)
         self.assertEqual(captured["fields"]["protocol"], 0)
 
 
