@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.24.5")
+        self.assertEqual(document["info"]["version"], "1.24.6")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -65,8 +65,15 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("toolbar.style.display=monitoring?'none':''", INDEX_HTML)
         self.assertIn("summary.style.display=monitoring?'none':''", INDEX_HTML)
         self.assertIn("showMainPage('monitor');", INDEX_HTML)
-        self.assertLess(INDEX_HTML.rfind('Grade EPG completa — hoje'),
-                        INDEX_HTML.rfind('Monitoramento dos canais'))
+        self.assertGreater(INDEX_HTML.rfind('Grade EPG completa — hoje'),
+                           INDEX_HTML.rfind('Monitoramento dos canais'))
+
+    def test_monitoring_uses_channel_cards_and_lazy_expandable_guide(self):
+        self.assertIn('class="channel-monitor-card', INDEX_HTML)
+        self.assertIn('function monitorChannelCards()', INDEX_HTML)
+        self.assertIn('function toggleMonitorGuide()', INDEX_HTML)
+        self.assertIn('monitorGuideExpanded&&!monitorGuide', INDEX_HTML)
+        self.assertIn("mainPage==='monitor'&&monitorGuideExpanded", INDEX_HTML)
 
     def test_carrier_overview_can_sort_by_name_or_multicast_destination(self):
         self.assertNotIn('id="carrierSort"', INDEX_HTML)
