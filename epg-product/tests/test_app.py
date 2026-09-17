@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.24.7")
+        self.assertEqual(document["info"]["version"], "1.24.8")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -84,6 +84,13 @@ class EpgProductTests(unittest.TestCase):
         self.assertIn("onclick=\"setCarrierSort('multicast')\"", INDEX_HTML)
         self.assertIn('function sortedCarriers(carriers)', INDEX_HTML)
         self.assertIn('function multicastSortKey(carrier)', INDEX_HTML)
+
+    def test_channel_catalog_is_invalidated_when_xmltv_source_changes(self):
+        self.assertIn('let catalogRequestSequence=0', INDEX_HTML)
+        self.assertIn('list.dataset.requestId!==requestId', INDEX_HTML)
+        self.assertIn("previous!==sourceId&&input)input.value=''", INDEX_HTML)
+        self.assertIn("event.target?.id==='cSource'", INDEX_HTML)
+        self.assertIn('Carregando canais da fonte…', INDEX_HTML)
 
     def test_epg_fingerprint_ignores_xml_formatting_but_detects_schedule_changes(self):
         first = b'''<tv generated-at="one">
