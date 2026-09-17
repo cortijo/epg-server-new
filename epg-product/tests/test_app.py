@@ -27,7 +27,7 @@ class EpgProductTests(unittest.TestCase):
     def test_rest_api_v1_contract_covers_management_and_queries(self):
         document = openapi_document()
         self.assertEqual(document["openapi"], "3.0.3")
-        self.assertEqual(document["info"]["version"], "1.24.4")
+        self.assertEqual(document["info"]["version"], "1.24.5")
         for path in (
             "/api/v1/system", "/api/v1/sources", "/api/v1/carriers",
             "/api/v1/carriers/{carrier_id}/channels/{channel_id}",
@@ -69,9 +69,10 @@ class EpgProductTests(unittest.TestCase):
                         INDEX_HTML.rfind('Monitoramento dos canais'))
 
     def test_carrier_overview_can_sort_by_name_or_multicast_destination(self):
-        self.assertIn('id="carrierSort"', INDEX_HTML)
-        self.assertIn('value="name">Portadora', INDEX_HTML)
-        self.assertIn('value="multicast">Destino multicast', INDEX_HTML)
+        self.assertNotIn('id="carrierSort"', INDEX_HTML)
+        self.assertIn('function applyCarrierSortHeaders()', INDEX_HTML)
+        self.assertIn("onclick=\"setCarrierSort('name')\"", INDEX_HTML)
+        self.assertIn("onclick=\"setCarrierSort('multicast')\"", INDEX_HTML)
         self.assertIn('function sortedCarriers(carriers)', INDEX_HTML)
         self.assertIn('function multicastSortKey(carrier)', INDEX_HTML)
 
