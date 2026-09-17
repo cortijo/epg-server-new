@@ -1,0 +1,35 @@
+:root {
+  --omni-navy: #062b78;
+  --omni-blue: #0646bd;
+  --omni-cyan: #1677e8;
+  --omni-background: #f5f7fa;
+  --omni-surface: #ffffff;
+  --omni-text: #14263a;
+  --omni-muted: #6d7c8d;
+  --omni-border: #d4dbe5;
+  --omni-success: #19a974;
+  --omni-warning: #d99a23;
+  --omni-danger: #df4c55;
+  --omni-font: Inter, "Segoe UI", Arial, sans-serif;
+  --omni-radius-sm: 7px;
+  --omni-radius-md: 10px;
+  --omni-space-1: 4px;
+  --omni-space-2: 8px;
+  --omni-space-3: 12px;
+  --omni-space-4: 16px;
+  --omni-space-5: 24px;
+  --omni-shadow: 0 2px 8px rgb(23 57 92 / 8%);
+}
+
+.omni-app { background: var(--omni-background); color: var(--omni-text); font-family: var(--omni-font); }
+.omni-card { background: var(--omni-surface); border: 1px solid var(--omni-border); border-radius: var(--omni-radius-md); box-shadow: var(--omni-shadow); }
+.omni-button { min-height: 38px; padding: 0 14px; border: 1px solid var(--omni-border); border-radius: 8px; background: var(--omni-surface); color: var(--omni-text); font: 600 13px var(--omni-font); }
+.omni-button--primary { border-color: var(--omni-blue); background: var(--omni-blue); color: #fff; }
+.omni-button--danger { border-color: var(--omni-danger); color: var(--omni-danger); }
+.omni-status--ok { --omni-status-color: var(--omni-success); }
+.omni-status--warning { --omni-status-color: var(--omni-warning); }
+.omni-status--error { --omni-status-color: var(--omni-danger); }
+.omni-status-dot { display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--omni-status-color, var(--omni-muted)); }
+.omni-monitor-card { border-top: 4px solid var(--omni-status-color, var(--omni-muted)); padding: 14px; }
+.omni-focus:focus-visible, .omni-button:focus-visible { outline: 3px solid rgb(22 119 232 / 30%); outline-offset: 2px; }
+

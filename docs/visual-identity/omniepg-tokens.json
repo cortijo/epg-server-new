@@ -1,0 +1,33 @@
+{
+  "name": "OMNIEPG",
+  "version": "1.0.0",
+  "colors": {
+    "navy": "#062B78",
+    "blue": "#0646BD",
+    "cyan": "#1677E8",
+    "background": "#F5F7FA",
+    "surface": "#FFFFFF",
+    "text": "#14263A",
+    "muted": "#6D7C8D",
+    "border": "#D4DBE5",
+    "success": "#19A974",
+    "warning": "#D99A23",
+    "danger": "#DF4C55"
+  },
+  "typography": {
+    "family": "Inter, Segoe UI, Arial, sans-serif",
+    "pageTitle": { "size": 20, "weight": 700 },
+    "cardTitle": { "size": 14, "weight": 700 },
+    "body": { "size": 13, "weight": 400 },
+    "metadata": { "size": 11, "weight": 400 },
+    "kpi": { "size": 28, "weight": 700 }
+  },
+  "radius": { "small": 7, "medium": 10 },
+  "spacing": [4, 8, 12, 16, 24, 32],
+  "breakpoints": { "mobile": 760, "navigation": 900, "wide": 1250 },
+  "assets": {
+    "logoDark": "epg-product/assets/omniepg_logotipo_escuro.svg",
+    "logoTransparent": "epg-product/assets/omniepg_logotipo_transparente.svg",
+    "icon": "epg-product/assets/omniepg_icone.svg"
+  }
+}
